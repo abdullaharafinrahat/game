@@ -14,8 +14,12 @@ import type { Scene } from '@babylonjs/core/scene';
 import { CAMERA } from '../config';
 
 export interface CameraTarget {
-  /** Feet position of the player. */
+  /** Eye point of the player (feet + eye height). */
   position: Vector3;
+  /** True while the player is sprinting and on the ground. */
+  sprint?: boolean;
+  /** False while airborne; a jump must not freeze the camera's height. */
+  grounded?: boolean;
 }
 
 export class ThirdPersonCamera {
@@ -35,6 +39,15 @@ export class ThirdPersonCamera {
   private shake = 0;
   private smoothedPivot = new Vector3();
   private initialised = false;
+  /**
+   * 0..1 blend into "straight-line sprint" framing. While it is engaged the
+   * camera rides level and straight behind the player: pitch input is ignored
+   * and eased to horizontal, the shoulder offset is faded out, the eye height is
+   * stabilised against ground bumps, and shake is suppressed.
+   */
+  private sprintLock = 0;
+  private lockedHeight = 0;
+  private heightLocked = false;
   private readonly offset = new Vector3();
   private readonly pivot = new Vector3();
   private readonly lookTarget = new Vector3();
@@ -86,6 +99,20 @@ export class ThirdPersonCamera {
   }
 
   update(dt: number, target: CameraTarget, look: { x: number; y: number }, aiming: boolean): void {
+    // Engage the straight-line sprint framing once he is really running and
+    // grounded (a jump or fall keeps normal camera tracking so he cannot leave
+    // the frame). It fades in and out so the transition is not a snap.
+    const wantLock = !!target.sprint && target.grounded !== false && !aiming;
+    // Releasing is quicker than engaging, and quickest of all once he is airborne:
+    // a jump should hand camera control straight back rather than leave the view
+    // pinned to the ground while he rises.
+    const lockRate = wantLock
+      ? CAMERA.sprintLockRate
+      : target.grounded === false
+        ? CAMERA.sprintLockAirborneRate
+        : CAMERA.sprintLockRate;
+    this.sprintLock += ((wantLock ? 1 : 0) - this.sprintLock) * Math.min(1, dt * lockRate);
+
     const deadzone = 1e-6;
     const sensitivity = CAMERA.sensitivityMouse * this.sensitivityScale * (1 - this.aimBlend * 0.55);
     if (Math.abs(look.x) > deadzone || Math.abs(look.y) > deadzone) {
@@ -94,8 +121,15 @@ export class ThirdPersonCamera {
       // means *adding* to yaw. Subtracting it turned the view the wrong way:
       // moving the mouse right swung the camera left.
       this.yaw += look.x * sensitivity;
-      this.pitch += (this.invertY ? -look.y : look.y) * sensitivity;
+      // Vertical look is faded out while sprinting: the sprint camera moves
+      // horizontally only. `look.y` also drives touch drag, so this covers both.
+      this.pitch += (this.invertY ? -look.y : look.y) * sensitivity * (1 - this.sprintLock);
       this.pitch = Math.min(CAMERA.maxPitch, Math.max(CAMERA.minPitch, this.pitch));
+    }
+    // ...and while it is engaged it eases back to level, so the camera settles
+    // onto a horizontal plane instead of holding whatever tilt it had.
+    if (this.sprintLock > 0.001) {
+      this.pitch += (0 - this.pitch) * Math.min(1, dt * 3.5 * this.sprintLock);
     }
 
     // Recoil decays back to centre.
@@ -107,7 +141,12 @@ export class ThirdPersonCamera {
     this.aimBlend += ((aiming ? 1 : 0) - this.aimBlend) * Math.min(1, dt * 9);
 
     const yaw = this.yaw + this.recoilYaw;
-    const pitch = Math.min(CAMERA.maxPitch, Math.max(CAMERA.minPitch, this.pitch + this.recoilPitch));
+    // Recoil pitch is also faded out while sprinting so a stray shake cannot tilt
+    // the sprint camera off horizontal.
+    const pitch = Math.min(
+      CAMERA.maxPitch,
+      Math.max(CAMERA.minPitch, this.pitch + this.recoilPitch * (1 - this.sprintLock)),
+    );
 
     // Pivot sits just above eye height on the player, pushed sideways for the
     // over-the-shoulder framing. `target.position` is already the eye point
@@ -115,10 +154,34 @@ export class ThirdPersonCamera {
     // orbit centre ~1.6 m above the character's head: measured, that left him
     // 33 degrees off the view axis at hip and completely out of frame when
     // aiming down the sights.
-    const shoulder = CAMERA.shoulder + (CAMERA.aimShoulder - CAMERA.shoulder) * this.aimBlend;
+    // The shoulder offset is faded out for the sprint lock: a sideways camera
+    // offset swings the view left and right every time the yaw moves, which is
+    // exactly the "not a straight line" motion. Centred behind, the camera
+    // travels the same line as the player.
+    const shoulder = (CAMERA.shoulder + (CAMERA.aimShoulder - CAMERA.shoulder) * this.aimBlend) * (1 - this.sprintLock);
     const right = new Vector3(Math.cos(-yaw), 0, Math.sin(-yaw));
     this.pivot.copyFrom(target.position);
-    this.pivot.y += CAMERA.height - this.aimBlend * 0.04;
+    const eyeHeight = target.position.y + CAMERA.height - this.aimBlend * 0.04;
+    if (this.sprintLock > 0.001) {
+      // Hold the eye height steady across bumps so the camera cannot rise or
+      // fall while sprinting; it drifts along slowly rather than tracking the
+      // capsule exactly.
+      if (!this.heightLocked) {
+        this.lockedHeight = eyeHeight;
+        this.heightLocked = true;
+      } else if (Math.abs(eyeHeight - this.lockedHeight) > CAMERA.sprintHeightLag) {
+        // Safety net: on a steep ramp the slow drift would leave the camera
+        // behind the terrain. Past this lag it catches up at once, which normal
+        // ground never reaches, so bump-free riding is unaffected.
+        this.lockedHeight = eyeHeight;
+      } else {
+        this.lockedHeight += (eyeHeight - this.lockedHeight) * Math.min(1, dt * CAMERA.sprintHeightDrift);
+      }
+      this.pivot.y = this.lockedHeight * this.sprintLock + eyeHeight * (1 - this.sprintLock);
+    } else {
+      this.heightLocked = false;
+      this.pivot.y = eyeHeight;
+    }
     this.pivot.addInPlace(right.scale(shoulder));
 
     if (!this.initialised) {
@@ -146,11 +209,26 @@ export class ThirdPersonCamera {
     this.camera.fov += (fov - this.camera.fov) * Math.min(1, dt * 10);
 
     this.camera.position.copyFrom(this.smoothedPivot).addInPlace(this.offset.scale(this.currentDistance));
-    if (this.shake > 0.001) {
-      this.camera.position.x += (Math.random() - 0.5) * this.shake;
-      this.camera.position.y += (Math.random() - 0.5) * this.shake;
-    }
     this.lookTarget.copyFrom(this.smoothedPivot).addInPlace(this.offset.scale(this.currentDistance * 0.35));
+
+    if (this.sprintLock > 0.001) {
+      // The spring arm shortens when something comes between camera and player
+      // (walls, crates, a kerb), and because the arm points slightly upward the
+      // camera would ride up and down with it — measured at 36 mm per frame while
+      // turning through the level's buildings. Pin the rig to a level plane and
+      // shift the look target by the same amount, which holds the view direction
+      // exactly while the horizontal distance still shortens as it must.
+      const levelY = this.lockedHeight + this.offset.y * this.desiredDistance;
+      const shift = (levelY - this.camera.position.y) * this.sprintLock;
+      this.camera.position.y += shift;
+      this.lookTarget.y += shift;
+    }
+
+    const shake = this.shake * (1 - this.sprintLock);
+    if (shake > 0.001) {
+      this.camera.position.x += (Math.random() - 0.5) * shake;
+      this.camera.position.y += (Math.random() - 0.5) * shake;
+    }
     this.camera.setTarget(this.lookTarget);
     this.camera.fov = (CAMERA.fov + (CAMERA.aimFov - CAMERA.fov) * this.aimBlend) * (Math.PI / 180);
   }

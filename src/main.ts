@@ -513,7 +513,12 @@ class Game {
     const aiming = state.aim;
 
     if (!this.paused && this.started && this.player) {
-      this.camera.update(dt, { position: this.player.eyePoint }, this.input.consumeLook(), aiming);
+      this.camera.update(
+        dt,
+        { position: this.player.eyePoint, sprint: this.player.sprinting, grounded: this.player.grounded },
+        this.input.consumeLook(),
+        aiming,
+      );
       this.player.update(dt, this.input, aiming);
       this.environment?.updateShadowFocus(this.player.position);
       this.hud.setSpeed(this.player.speed);

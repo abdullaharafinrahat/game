@@ -59,6 +59,22 @@ export const CAMERA = {
   aimDistance: 1.35,
   /** Extra height above the player's eye point for the orbit centre. */
   height: 0.18,
+  /**
+   * How fast the sprint camera's height settles to the player's eye height
+   * (per second). Kept low so bumps and gait cannot lift or drop the camera
+   * frame to frame, while still letting it follow a slope over a second or two.
+   */
+  sprintHeightDrift: 0.9,
+  /** Blend rate for engaging / disengaging the straight-line sprint camera. */
+  sprintLockRate: 5,
+  /** Faster release once he leaves the ground, so a jump regains normal tracking. */
+  sprintLockAirborneRate: 12,
+  /**
+   * Largest height difference the sprint camera will tolerate before snapping to
+   * the player's eye height. Only steep ramps reach this; it stops the level ride
+   * from sinking into a hillside.
+   */
+  sprintHeightLag: 1.5,
   shoulder: 0.55,
   /**
    * Shoulder offset while aiming. Keep it well under aimDistance * tan(aimFov/2)

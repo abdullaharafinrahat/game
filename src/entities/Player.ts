@@ -45,6 +45,8 @@ export class Player {
   velocity = new Vector3(0, 0, 0);
   stance: Stance = 'rifle';
   grounded = true;
+  /** True once he is actually sprinting (key held, moving forward, above run speed). */
+  sprinting = false;
   crouching = false;
   alive = true;
   health: number = PLAYER.maxHealth;
@@ -153,6 +155,9 @@ export class Player {
     if (wishLength > 1e-4) wish.scaleInPlace(1 / wishLength);
 
     const wantsSprint = state.sprint && !aiming && !state.crouch && state.moveY > 0.4;
+    // Only report sprinting once he is really up to speed, so the camera's
+    // straight-line lock engages on the run and not while pulling away.
+    this.sprinting = wantsSprint && this.speed > MOVE.run * 0.9;
     const maxSpeed = state.crouch ? MOVE.crouch : aiming ? MOVE.aim : wantsSprint ? MOVE.sprint : MOVE.run;
     const desiredSpeed = maxSpeed * Math.min(1, wishLength);
     const desired = wish.scale(desiredSpeed);
