@@ -156,38 +156,49 @@ while standing does not swing the rifle off target.
 
 ### The sprint camera
 
-While sprinting the camera rides **level and straight behind the player**: it does
-not rise or fall, does not bob with the run, and does not tilt. Measured on a
-34 m sprint: pitch spread **0.000 rad**, total height change **2.5 mm**, path
-deviation **1 mm**. Horizontal steering is untouched — a 150° turn still tracks
-the mouse, and the camera stays level throughout.
+While sprinting the camera rides a **straight line in both axes** — horizontally
+along the run, and vertically when you look up or down — with no bob, no sway and
+no jitter in either. You can look up and down while sprinting; the view pitches
+and the camera climbs or drops with it, smoothly.
 
-Four things had to be neutralised to get there, each of which is a real camera
-motion source:
+Measured on a 34 m sprint with no vertical input: **0** vertical direction changes,
+**0.03 mm of drift per metre travelled**, **1 mm** of path deviation. With a
+constant vertical drag: **0** direction reversals, monotonicity **1.0**, worst
+frame 64 mm against a median step of 27 mm (a 2.4× ratio, i.e. no spikes), and the
+same sweep twice gives 3.058 m vs 2.994 m of travel. A 150° horizontal turn tracks
+the mouse while staying level throughout.
 
-1. **Vertical look.** `look.y` is faded out while sprinting (this also covers touch
-   drag, which feeds the same axis), and the pitch eases back to level rather than
-   holding whatever tilt it had. Recoil pitch is faded out too.
+Five real camera motion sources had to be neutralised to get there:
+
+1. **Terrain bob.** Eye height is held steady rather than tracking the capsule, so
+   bumps and the gait cycle cannot move the camera. It still settles onto a slope
+   over about a second, with a safety net (`CAMERA.sprintHeightLag`) for terrain
+   that drops away faster than it will follow.
 2. **The vertical component of the spring arm.** The arm points slightly upward, so
    when it shortens against geometry the camera rides up and down with it —
    measured at **36 mm per frame** while turning past the level's buildings. The
-   rig is now pinned to a level plane while sprinting and the look target is
-   shifted by the same amount, so the view direction is untouched while the arm
-   still shortens horizontally when it must.
+   rig is pinned to a level plane while sprinting and the look target is shifted by
+   the same amount, so the view direction is untouched while the arm still shortens
+   when it must. The pin is computed from the *collision-shortened* distance, not
+   the nominal one: using the nominal distance pushed the camera straight back down
+   through whatever the arm had just avoided.
 3. **The shoulder offset.** A sideways camera offset swings the view left and right
    every time the yaw moves, which is the "not a straight line" motion. It fades
    out, leaving the camera centred behind him on the same line he is running.
-4. **Camera shake.** Recoil shake is suppressed during the sprint.
-
-Eye height is held steady instead of tracking the capsule, so ground bumps and the
-gait cycle cannot move the camera; it still settles onto a slope over about a
-second, with a safety net (`CAMERA.sprintHeightLag`) that snaps it if the terrain
-drops away further than it will follow.
+4. **Camera shake.** Recoil shake is suppressed during the sprint; it is noise
+   rather than intentional movement.
+5. **The camera's own collisions.** It must not collide with the player's body
+   (`CameraTarget.ignore`), and when looking steeply down it would otherwise end
+   up inside the road — a full-screen smear of dirt. `clampAboveGround` keeps
+   `CAMERA.minGroundClearance` above the terrain, probing from high above and
+   taking the *lowest* surface: probing from the camera cannot recover once it is
+   under the ground, and taking the nearest hit from above picks the underside of
+   the level's overhead slabs instead of the road.
 
 The lock is **grounded-gated**: jumping releases it quickly
 (`CAMERA.sprintLockAirborneRate`) so the camera follows him into the air instead of
-watching him leave the frame — verified with a sprint-jump (he rises 0.93 m, the
-camera follows 0.94 m, and he never leaves the view).
+watching him leave the frame — verified with a sprint-jump (he rises 0.68 m, the
+camera follows 0.67 m).
 
 ## Architecture
 

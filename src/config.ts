@@ -75,6 +75,8 @@ export const CAMERA = {
    * from sinking into a hillside.
    */
   sprintHeightLag: 1.5,
+  /** Minimum height the camera keeps above the terrain beneath it. */
+  minGroundClearance: 0.4,
   shoulder: 0.55,
   /**
    * Shoulder offset while aiming. Keep it well under aimDistance * tan(aimFov/2)

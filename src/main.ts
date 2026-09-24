@@ -515,7 +515,12 @@ class Game {
     if (!this.paused && this.started && this.player) {
       this.camera.update(
         dt,
-        { position: this.player.eyePoint, sprint: this.player.sprinting, grounded: this.player.grounded },
+        {
+          position: this.player.eyePoint,
+          sprint: this.player.sprinting,
+          grounded: this.player.grounded,
+          ignore: [...this.library.character.meshes, ...(this.player.weapon.modelMesh ? [this.player.weapon.modelMesh] : [])],
+        },
         this.input.consumeLook(),
         aiming,
       );

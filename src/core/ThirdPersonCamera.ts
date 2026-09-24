@@ -7,6 +7,7 @@
  * player, and blends into a tight ADS pose when aiming.
  */
 import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera';
+import type { AbstractMesh } from '@babylonjs/core/Meshes/abstractMesh';
 import { Ray } from '@babylonjs/core/Culling/ray';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import type { Scene } from '@babylonjs/core/scene';
@@ -20,6 +21,12 @@ export interface CameraTarget {
   sprint?: boolean;
   /** False while airborne; a jump must not freeze the camera's height. */
   grounded?: boolean;
+  /**
+   * Meshes the camera must not treat as obstacles — the player's own body and
+   * weapon. Without this the spring arm can be stopped by the person it is
+   * following.
+   */
+  ignore?: AbstractMesh[];
 }
 
 export class ThirdPersonCamera {
@@ -48,6 +55,8 @@ export class ThirdPersonCamera {
   private sprintLock = 0;
   private lockedHeight = 0;
   private heightLocked = false;
+  /** Meshes the camera ignores when colliding (the player's own body). */
+  private ignore: AbstractMesh[] = [];
   private readonly offset = new Vector3();
   private readonly pivot = new Vector3();
   private readonly lookTarget = new Vector3();
@@ -102,6 +111,7 @@ export class ThirdPersonCamera {
     // Engage the straight-line sprint framing once he is really running and
     // grounded (a jump or fall keeps normal camera tracking so he cannot leave
     // the frame). It fades in and out so the transition is not a snap.
+    this.ignore = target.ignore ?? [];
     const wantLock = !!target.sprint && target.grounded !== false && !aiming;
     // Releasing is quicker than engaging, and quickest of all once he is airborne:
     // a jump should hand camera control straight back rather than leave the view
@@ -121,15 +131,14 @@ export class ThirdPersonCamera {
       // means *adding* to yaw. Subtracting it turned the view the wrong way:
       // moving the mouse right swung the camera left.
       this.yaw += look.x * sensitivity;
-      // Vertical look is faded out while sprinting: the sprint camera moves
-      // horizontally only. `look.y` also drives touch drag, so this covers both.
-      this.pitch += (this.invertY ? -look.y : look.y) * sensitivity * (1 - this.sprintLock);
+      // Vertical look stays live while sprinting, so the camera can climb and
+      // descend too. `look.y` also drives touch drag, so this covers both. Pitch
+      // is integrated straight from the input, which makes the resulting vertical
+      // travel a clean line — all the wobble while sprinting came from the rig
+      // (arm, shoulder offset, terrain bob), not from this axis, and those are
+      // stabilised separately below.
+      this.pitch += (this.invertY ? -look.y : look.y) * sensitivity;
       this.pitch = Math.min(CAMERA.maxPitch, Math.max(CAMERA.minPitch, this.pitch));
-    }
-    // ...and while it is engaged it eases back to level, so the camera settles
-    // onto a horizontal plane instead of holding whatever tilt it had.
-    if (this.sprintLock > 0.001) {
-      this.pitch += (0 - this.pitch) * Math.min(1, dt * 3.5 * this.sprintLock);
     }
 
     // Recoil decays back to centre.
@@ -141,8 +150,9 @@ export class ThirdPersonCamera {
     this.aimBlend += ((aiming ? 1 : 0) - this.aimBlend) * Math.min(1, dt * 9);
 
     const yaw = this.yaw + this.recoilYaw;
-    // Recoil pitch is also faded out while sprinting so a stray shake cannot tilt
-    // the sprint camera off horizontal.
+    // Recoil *shake* is still suppressed while sprinting: it is noise rather than
+    // intentional movement, and it would break the straight vertical line. Plain
+    // pitch input above is unaffected.
     const pitch = Math.min(
       CAMERA.maxPitch,
       Math.max(CAMERA.minPitch, this.pitch + this.recoilPitch * (1 - this.sprintLock)),
@@ -218,11 +228,17 @@ export class ThirdPersonCamera {
       // turning through the level's buildings. Pin the rig to a level plane and
       // shift the look target by the same amount, which holds the view direction
       // exactly while the horizontal distance still shortens as it must.
-      const levelY = this.lockedHeight + this.offset.y * this.desiredDistance;
+      // Note `currentDistance`, not `desiredDistance`: the arm shortens when it
+      // meets geometry, and pinning to the full-length height would push the
+      // camera straight back down through the thing the arm just avoided (it
+      // buried the camera under the road when looking down while sprinting).
+      const levelY = this.lockedHeight + this.offset.y * this.currentDistance;
       const shift = (levelY - this.camera.position.y) * this.sprintLock;
       this.camera.position.y += shift;
       this.lookTarget.y += shift;
     }
+
+    this.clampAboveGround(this.smoothedPivot.y);
 
     const shake = this.shake * (1 - this.sprintLock);
     if (shake > 0.001) {
@@ -233,12 +249,47 @@ export class ThirdPersonCamera {
     this.camera.fov = (CAMERA.fov + (CAMERA.aimFov - CAMERA.fov) * this.aimBlend) * (Math.PI / 180);
   }
 
+  /** Geometry the camera should collide with (never the player's own body). */
+  private isBlocker = (mesh: AbstractMesh): boolean =>
+    mesh.isPickable && mesh.isEnabled() && !this.ignore.includes(mesh);
+
   /** Distance at which the arm hits geometry (never closer than 0.35 m). */
   private collide(from: Vector3, direction: Vector3, maxDistance: number): number {
     const ray = new Ray(from, direction, maxDistance);
-    const hit = this.scene.pickWithRay(ray, (mesh) => mesh.isPickable && mesh.isEnabled());
+    const hit = this.scene.pickWithRay(ray, this.isBlocker);
     if (hit?.hit && hit.distance > 0) return Math.max(0.35, hit.distance - 0.25);
     return maxDistance;
+  }
+
+  /**
+   * Lifts the camera out of the terrain if it has ended up below it. Looking
+   * steeply down walks the arm under the ground, and a camera inside the road
+   * renders as a full-screen smear of dirt. Lifting is a last resort that never
+   * triggers in the open, where the sprint ride is a clean straight line.
+   */
+  private clampAboveGround(referenceY: number): void {
+    // Probe from high above the player and take the LOWEST surface rather than the
+    // nearest one. Two failure modes force this:
+    //   - Probing from the camera itself cannot recover once it is inside the
+    //     terrain: the ray starts behind a back face and never reports a hit.
+    //   - Taking the first hit from above is wrong too, because this level has
+    //     overhead concrete slabs — the clamp decided the "ground" was 4 m above
+    //     the camera and threw it into the air (a 3.2 m single-frame jump).
+    // The lowest surface is the one the camera has to stay above.
+    const from = new Vector3(this.camera.position.x, referenceY + 40, this.camera.position.z);
+    const hits = this.scene.multiPickWithRay(new Ray(from, Vector3.Down(), 160), this.isBlocker);
+    if (!hits?.length) return;
+    let floorY = Infinity;
+    for (const hit of hits) {
+      if (hit.pickedPoint) floorY = Math.min(floorY, hit.pickedPoint.y);
+    }
+    if (!Number.isFinite(floorY)) return;
+    const minY = floorY + CAMERA.minGroundClearance;
+    if (this.camera.position.y < minY) {
+      const lift = minY - this.camera.position.y;
+      this.camera.position.y += lift;
+      this.lookTarget.y += lift;
+    }
   }
 
   dispose(): void {
