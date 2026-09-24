@@ -78,6 +78,24 @@ export const CAMERA = {
   positionLerp: 22,
 } as const;
 
+/**
+ * How the character's facing follows the camera.
+ *
+ * Standing still, the camera free-orbits around him so you can look about
+ * without spinning the model; he turns as soon as you move, aim or fire. Turns
+ * are rate limited rather than snapped, so you actually watch him pivot (an
+ * instant snap to the camera yaw is invisible on screen because the camera sits
+ * behind him — the whole world appears to rotate instead).
+ */
+export const TURN = {
+  /** Radians per second while walking/running (~480 deg/s). */
+  moving: 8.4,
+  /** While aiming or firing (~920 deg/s) — tight enough to feel crosshair-locked. */
+  aiming: 16,
+  /** Seconds a shot keeps him turned to the camera after the trigger frame. */
+  fireHold: 0.5,
+} as const;
+
 export const WEAPON = {
   name: 'Sniper',
   magSize: 5,

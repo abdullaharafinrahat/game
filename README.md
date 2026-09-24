@@ -113,7 +113,7 @@ Pages, Netlify, S3 or a subfolder of any host. A Pages workflow is included as
 | Desktop | |
 |---|---|
 | `WASD` | move |
-| Mouse | look (click to lock the pointer) |
+| Mouse | look (click to lock the pointer); orbits the camera, and the character turns with it when moving or aiming |
 | `Shift` | sprint |
 | `Space` | jump (coyote time + input buffering) |
 | `Ctrl` / `C` | crouch |
@@ -124,12 +124,35 @@ Pages, Netlify, S3 or a subfolder of any host. A Pages workflow is included as
 | `F3` | debug overlay |
 | `Q` | cycle quality tier |
 
-Touch: left stick moves (push to the rim to sprint), dragging the right half aims, and the
+Touch: dragging the right half orbits the camera exactly like the mouse; the character turns with it
+when moving or aiming. Left stick moves (push to the rim to sprint), and the
 on-screen buttons fire, jump, reload, aim, crouch and toggle sprint. The layout is chosen from
 `pointer: coarse`, and the same `InputManager` state feeds both paths, so gameplay code never
 branches on platform.
 
 ---
+
+## Camera and facing
+
+The camera always orbits the player (it is never first-person), and the character
+follows it differently depending on what he is doing:
+
+| State | Character | Camera |
+| --- | --- | --- |
+| Standing still | keeps his heading | free — the mouse orbits him, so you can walk the camera round and look at him |
+| Moving | turns toward his direction of travel, rate limited (~480°/s) | follows him |
+| Aiming or firing | turns to the camera, rate limited (~920°/s) | tight, with the ADS shoulder offset |
+
+Turns are rate limited rather than instant. A hard snap to the camera yaw is
+*invisible*: because the camera is always behind him, rotating the character
+produces no change on screen at all — the entire world appears to spin while the
+mute model stays pinned centre-frame. That is what "the camera moves, not the
+character" turned out to describe. A bounded turn rate makes the pivot something
+you can actually see, and free-orbit idle means the mouse does not drag him
+around while he is standing.
+
+A shot holds his facing on the camera for `TURN.fireHold` (0.5 s), so firing
+while standing does not swing the rifle off target.
 
 ## Architecture
 
@@ -207,11 +230,14 @@ start the game, then `node verify/regression.mjs`. See `verify/README.md`.
   weapon orientation all came out of this.
 - `barrel.mjs` — asserts the rifle is horizontal (pitch −4°), pointing forward (10° off facing),
   and gripped 0.23 m from its centre — the intended 30%-from-muzzle hold.
-- `regression.mjs` — 15/15 passing on both the dev server and the production build. It presses each
+- `regression.mjs` — 21/21 passing on both the dev server and the production build. It presses each
   movement key and checks the *measured* travel direction against the camera's view axis, samples
-  leg-bone quaternions across idle → walk → sprint → stop to prove the skeleton is moving, and reads
-  the rifle's barrel direction against the character's facing. This is the harness that pinned the
-  three "movement is reversed / the gun is reversed / nothing animates" reports.
+  leg-bone quaternions across idle → walk → sprint → stop to prove the skeleton is moving, reads the
+  rifle's barrel direction against the character's facing, asserts the look axes are not inverted,
+  and pins the facing policy above (camera orbits without turning him when he stands, he turns when
+  he moves, turning is rate limited rather than snapped, and aiming locks him to the camera). This
+  is the harness that pinned the "movement is reversed / gun is reversed / nothing animates"
+  reports.
 
 Bugs these caught that guesswork would not have:
 
@@ -248,6 +274,16 @@ mouse right swung the camera left (`yaw -= look.x`). Yaw *increases* clockwise s
 camera's right vector at yaw 0 is +X — so looking right means adding to yaw. Mouse-down already
 looked down correctly, which made the mismatched horizontal axis easy to miss. `regression.mjs` now
 asserts both axes against the camera's own basis.
+
+### A note on this model's -Z
+
+The character's **visual** forward is his local **+Z** (established by rendering
+him at `rotation.y = 0` and photographing which side his face is on), which is
+the opposite of the usual convention. Free-look made that concrete: standing at
+`yaw = 0` with the camera behind him, the camera reports looking at **180°**,
+because a camera placed "behind" a +Z-forward model sits on its -Z side. So
+anything that assumes -Z forward — a camera offset, a muzzle direction, a
+behaviour tree's "am I facing the target", an NPC's aim — needs the same flip.
 
 ### Babylon pitfalls this cost real time on
 

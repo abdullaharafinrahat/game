@@ -184,9 +184,12 @@ class Game {
     this.environment?.addShadowCaster(library.character.meshes);
     if (this.player.weapon.modelMesh) this.environment?.addShadowCaster(this.player.weapon.modelMesh);
 
-    // Camera starts behind the player looking at the level centre.
+    // Camera starts behind the player looking at the level centre. The player
+    // has to be turned to match, or the free-orbit idle (standing still he keeps
+    // his heading) leaves the opening shot staring at his face.
     this.camera.yaw = Math.PI;
     this.camera.pitch = -0.12;
+    this.player.setFacing(this.camera.yaw);
     this.camera.sensitivityScale = this.sensitivity;
     this.hud.setHealth(PLAYER.maxHealth, PLAYER.maxHealth);
     this.hud.setAmmo(WEAPON.magSize, WEAPON.reserveAmmo);

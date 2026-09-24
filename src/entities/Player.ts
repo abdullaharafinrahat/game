@@ -17,7 +17,7 @@ import type { AssetLibrary } from '../core/Assets';
 import type { GameAudio } from '../core/Audio';
 import type { ThirdPersonCamera } from '../core/ThirdPersonCamera';
 import type { InputManager } from '../input/InputManager';
-import { CLIP_STRIDE, GAME, MOVE, PLAYER, type QualitySettings } from '../config';
+import { CLIP_STRIDE, GAME, MOVE, PLAYER, TURN, type QualitySettings } from '../config';
 
 export type Stance = 'unarmed' | 'rifle';
 
@@ -54,6 +54,8 @@ export class Player {
   lastFallSpeed = 0;
 
   private facingAngle = 0;
+  /** Counts down after a shot, holding his facing on the camera while it fires. */
+  private aimFacingHold = 0;
   /** Vertical correction so the model's feet rest on the capsule base. */
   private readonly modelLift: number;
   private stepDistance = 0;
@@ -197,7 +199,7 @@ export class Player {
     if (this.position.y < -40) this.kill('fall');
 
     this.weapon.update(dt, input, this.animation);
-    this.updateAnimation(aiming, state.moveY);
+    this.updateAnimation(aiming, state.moveY, state.firePressed, dt);
     this.animation.update(dt);
     this.updateFootsteps(dt, wantsSprint);
     this.syncVisual();
@@ -261,6 +263,37 @@ export class Player {
     this.root.dispose();
   }
 
+  /**
+   * Pins the character's heading, used when setting up a scene so the opening
+   * camera framing is over-the-shoulder rather than face-on. (Standing still he
+   * keeps his heading, since the camera free-orbits instead of dragging him.)
+   */
+  setFacing(radians: number): void {
+    this.facingAngle = Player.wrapAngle(radians);
+    this.syncVisual();
+  }
+
+  /** Shortest signed angle from `from` to `to`. */
+  private static shortestAngle(from: number, to: number): number {
+    let delta = (to - from) % (Math.PI * 2);
+    if (delta > Math.PI) delta -= Math.PI * 2;
+    if (delta < -Math.PI) delta += Math.PI * 2;
+    return delta;
+  }
+
+  /** Wraps an angle into (-PI, PI] so it cannot drift over many camera spins. */
+  private static wrapAngle(a: number): number {
+    const wrapped = a % (Math.PI * 2);
+    return wrapped > Math.PI ? wrapped - Math.PI * 2 : wrapped <= -Math.PI ? wrapped + Math.PI * 2 : wrapped;
+  }
+
+  /** Turns toward `target` at a bounded rate, taking the short way round. */
+  private turnTowards(target: number, rate: number, dt: number): void {
+    const delta = Player.shortestAngle(this.facingAngle, target);
+    const step = rate * dt;
+    this.facingAngle = Player.wrapAngle(this.facingAngle + (Math.abs(delta) <= step ? delta : Math.sign(delta) * step));
+  }
+
   private syncVisual(): void {
     const p = this.controller.getPosition();
     this.root.position.set(p.x, p.y + this.feetOffset + this.modelLift, p.z);
@@ -295,21 +328,26 @@ export class Player {
    * Speed-driven locomotion blend. Weights across the set always sum to ~1 so
    * the result is a real blend, not "last writer wins".
    */
-  private updateAnimation(aiming: boolean, forwardInput: number): void {
+  private updateAnimation(aiming: boolean, forwardInput: number, firing: boolean, dt: number): void {
     const set = LOCOMOTION_SETS[this.stance];
     this.speed = Math.hypot(this.velocity.x, this.velocity.z);
 
-    // The character's visual forward is its own local +Z (confirmed by
-    // rendering it with rotation.y = 0: a camera on the -Z side sees its back).
-    // So the yaw that points the model along a direction d is atan2(d.x, d.z)
-    // — the old `+ Math.PI` turned the model to face away from wherever it was
-    // heading, which then made the hand-held rifle point backwards too.
-    if (aiming || this.speed < 0.15) {
-      // Standing still or aiming: face where the camera looks. yaw is exactly
-      // the angle of the view direction, so it can be used directly.
-      this.facingAngle = this.camera.yaw;
+    // --- Facing ------------------------------------------------------------
+    // The character's visual forward is his own local +Z (confirmed by rendering
+    // him at rotation.y = 0: a camera on the -Z side sees his back), so the yaw
+    // that points him along a direction d is atan2(d.x, d.z).
+    //
+    // Standing still he deliberately keeps his heading, which is what lets the
+    // camera free-orbit: rotating him to match the camera every frame is
+    // invisible anyway (the camera is always behind him) and it makes the whole
+    // world appear to spin instead of the character turning. He turns to the
+    // camera the moment you aim or fire, and follows his direction of travel
+    // while moving — both rate limited so the turn is something you can see.
+    this.aimFacingHold = firing ? TURN.fireHold : Math.max(0, this.aimFacingHold - dt);
+    if (aiming || this.aimFacingHold > 0) {
+      this.turnTowards(this.camera.yaw, TURN.aiming, dt);
     } else if (forwardInput !== 0 && this.speed > 0.2) {
-      this.facingAngle = Math.atan2(this.velocity.x, this.velocity.z);
+      this.turnTowards(Math.atan2(this.velocity.x, this.velocity.z), TURN.moving, dt);
     }
 
     const walkSpeed = this.strideFor(set.walk) || MOVE.walk;
