@@ -47,9 +47,19 @@ export class ThirdPersonCamera {
     this.camera.inputs.clear(); // fully driven by us
   }
 
-  /** Forward direction on the ground plane — what the player faces. */
+  /**
+   * Forward direction on the ground plane, taken from the camera itself.
+   *
+   * This used to be derived from the yaw as `-(sin yaw, cos yaw)`, which is the
+   * OPPOSITE of where the camera looks — and since Player drives movement from
+   * it, every direction came out mirrored (W walked backwards, A went right).
+   * Deriving it from the view vector cannot drift out of sync with the camera.
+   */
   get facing(): Vector3 {
-    return new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw)).scale(-1).normalize();
+    const dir = this.camera.getDirection(Vector3.Forward());
+    dir.y = 0;
+    if (dir.lengthSquared() < 1e-6) return new Vector3(0, 0, 1);
+    return dir.normalize();
   }
 
   /** Where a bullet goes: straight down the camera's forward axis. */
@@ -79,7 +89,11 @@ export class ThirdPersonCamera {
     const deadzone = 1e-6;
     const sensitivity = CAMERA.sensitivityMouse * this.sensitivityScale * (1 - this.aimBlend * 0.55);
     if (Math.abs(look.x) > deadzone || Math.abs(look.y) > deadzone) {
-      this.yaw -= look.x * sensitivity;
+      // Mouse/touch X is positive to the right and yaw increases clockwise seen
+      // from above (the camera's right vector at yaw 0 is +X), so looking right
+      // means *adding* to yaw. Subtracting it turned the view the wrong way:
+      // moving the mouse right swung the camera left.
+      this.yaw += look.x * sensitivity;
       this.pitch += (this.invertY ? -look.y : look.y) * sensitivity;
       this.pitch = Math.min(CAMERA.maxPitch, Math.max(CAMERA.minPitch, this.pitch));
     }
@@ -95,12 +109,16 @@ export class ThirdPersonCamera {
     const yaw = this.yaw + this.recoilYaw;
     const pitch = Math.min(CAMERA.maxPitch, Math.max(CAMERA.minPitch, this.pitch + this.recoilPitch));
 
-    // Pivot sits at eye height on the player, pushed sideways for the
-    // over-the-shoulder framing.
+    // Pivot sits just above eye height on the player, pushed sideways for the
+    // over-the-shoulder framing. `target.position` is already the eye point
+    // (feet + eye height), so an extra eye-height offset here would put the
+    // orbit centre ~1.6 m above the character's head: measured, that left him
+    // 33 degrees off the view axis at hip and completely out of frame when
+    // aiming down the sights.
     const shoulder = CAMERA.shoulder + (CAMERA.aimShoulder - CAMERA.shoulder) * this.aimBlend;
     const right = new Vector3(Math.cos(-yaw), 0, Math.sin(-yaw));
     this.pivot.copyFrom(target.position);
-    this.pivot.y += CAMERA.height + 1.55 - this.aimBlend * 0.04;
+    this.pivot.y += CAMERA.height - this.aimBlend * 0.04;
     this.pivot.addInPlace(right.scale(shoulder));
 
     if (!this.initialised) {

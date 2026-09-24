@@ -1,0 +1,16 @@
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox','--disable-dev-shm-usage'] });
+const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+page.on('pageerror', (e) => console.log('PAGEERROR', e.message));
+await page.goto('http://localhost:5173/?q=low', { waitUntil: 'load' });
+await page.waitForFunction(() => window.__game && window.__dev && !document.getElementById('start').classList.contains('hidden'), null, { timeout: 300000 });
+await page.evaluate(() => window.__game.start());
+await page.waitForTimeout(2000);
+const axes = await page.evaluate(() => window.__dev.probeWeaponAxes());
+console.log('axes:', JSON.stringify(axes, null, 1).slice(0, 1200));
+await page.evaluate(() => window.__dev.logAlignment(3));
+await page.waitForFunction(() => window.__alignmentLog.length >= 3, null, { timeout: 120000 });
+const log = await page.evaluate(() => window.__alignmentLog);
+console.log('mount:', JSON.stringify(log[0].mount));
+console.log('barrel:', JSON.stringify(log[0].barrel), 'fwd:', JSON.stringify(log[0].forward));
+await browser.close();

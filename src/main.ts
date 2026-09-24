@@ -6,6 +6,9 @@
  * loudly in the loading screen instead of leaving a black canvas.
  */
 import './styles.css';
+// Registers Babylon scene components that are otherwise only pulled in
+// implicitly. Must come before any Babylon class is constructed.
+import './core/babylonSideEffects';
 
 import { Engine } from '@babylonjs/core/Engines/engine';
 import { Scene } from '@babylonjs/core/scene';
@@ -14,7 +17,6 @@ import { Matrix, Quaternion } from '@babylonjs/core/Maths/math.vector';
 import { CharacterSupportedState } from '@babylonjs/core/Physics/v2/characterController';
 import { HavokPlugin } from '@babylonjs/core/Physics/v2/Plugins/havokPlugin';
 import { Ray } from '@babylonjs/core/Culling/ray';
-import '@babylonjs/core/Physics/physicsEngineComponent';
 import HavokPhysics from '@babylonjs/havok';
 // Vite turns the plugin's .wasm into a real URL we can hand to the loader.
 import havokWasmUrl from '@babylonjs/havok/lib/esm/HavokPhysics.wasm?url';
@@ -174,7 +176,13 @@ class Game {
         },
       },
       this.level.spawnPoint,
+      () => this.quality,
     );
+
+    // The player has to be a shadow caster or they float on the ground with no
+    // contact shadow — the single biggest read of "is this grounded?".
+    this.environment?.addShadowCaster(library.character.meshes);
+    if (this.player.weapon.modelMesh) this.environment?.addShadowCaster(this.player.weapon.modelMesh);
 
     // Camera starts behind the player looking at the level centre.
     this.camera.yaw = Math.PI;
@@ -289,6 +297,44 @@ class Game {
             dist: +h.distance.toFixed(2),
           })),
         };
+      },
+
+      /**
+       * Samples the rifle alignment on every rendered frame and stores the
+       * results on `window.__alignmentLog`. Sampling inside the render loop
+       * matters: reading matrices from outside can see a hand matrix from a
+       * different pose than the pivot's world matrix, which produces phantom
+       * pose-dependent errors.
+       */
+      logAlignment(frames = 60): number {
+        const log: unknown[] = [];
+        (window as unknown as { __alignmentLog: unknown[] }).__alignmentLog = log;
+        const observer = self.scene.onAfterRenderObservable.add(() => {
+          const pivot = self.scene.getTransformNodeByName('weaponPivot');
+          const mesh = self.player?.weapon.modelMesh;
+          const root = self.player?.root;
+          const hand = self.library.character.skeleton.bones.find((b) => /RightHand$/i.test(b.name))?.getTransformNode();
+          if (!pivot || !mesh || !root) return;
+          const barrel = Vector3.TransformNormal(new Vector3(-1, 0, 0), pivot.getWorldMatrix()).normalize();
+          const forward = root.forward.clone();
+          forward.y = 0;
+          forward.normalize();
+          const handScale = new Vector3();
+          const handRot = new Quaternion();
+          hand?.getWorldMatrix().decompose(handScale, handRot);
+          log.push({
+            dot: +(barrel.x * forward.x + barrel.z * forward.z).toFixed(3),
+            facingYaw: +root.rotation.y.toFixed(3),
+            barrel: barrel.asArray().map((v) => +v.toFixed(3)),
+            forward: forward.asArray().map((v) => +v.toFixed(3)),
+            pivotQuat: pivot.rotationQuaternion?.asArray().map((v) => +v.toFixed(3)) ?? null,
+            handQuat: handRot.asArray().map((v) => +v.toFixed(3)),
+            handPos: hand?.getAbsolutePosition().asArray().map((v) => +v.toFixed(2)) ?? null,
+            parent: pivot.parent?.name ?? null,
+          });
+          if (log.length >= frames) self.scene.onAfterRenderObservable.remove(observer);
+        });
+        return frames;
       },
 
       /** Where each of the rifle mesh's local axes points in world space. */
@@ -466,6 +512,7 @@ class Game {
     if (!this.paused && this.started && this.player) {
       this.camera.update(dt, { position: this.player.eyePoint }, this.input.consumeLook(), aiming);
       this.player.update(dt, this.input, aiming);
+      this.environment?.updateShadowFocus(this.player.position);
       this.hud.setSpeed(this.player.speed);
       this.hud.setStance(`${this.player.stance.toUpperCase()}${this.player.crouching ? ' · CROUCH' : ''}${aiming ? ' · ADS' : ''}`);
     } else {

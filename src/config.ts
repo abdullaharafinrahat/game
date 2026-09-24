@@ -57,9 +57,14 @@ export const PLAYER = {
 export const CAMERA = {
   distance: 3.4,
   aimDistance: 1.35,
-  height: 0.28,
+  /** Extra height above the player's eye point for the orbit centre. */
+  height: 0.18,
   shoulder: 0.55,
-  aimShoulder: 0.62,
+  /**
+   * Shoulder offset while aiming. Keep it well under aimDistance * tan(aimFov/2)
+   * or the character and rifle slide out of frame — that happened at 0.62.
+   */
+  aimShoulder: 0.34,
   fov: 78,
   aimFov: 48,
   minPitch: -1.15,
@@ -89,10 +94,8 @@ export const WEAPON = {
   bloomPerShot: 26,
   bloomWhileMoving: 14,
   bloomDecay: 42,
-  /** Tracer + impact VFX lifetimes (seconds). */
+  /** Tracer lifetime (seconds). Decal and particle budgets live in QUALITY. */
   tracerLife: 0.09,
-  impactLife: 6,
-  maxDecals: 40,
 } as const;
 
 /**
@@ -136,6 +139,7 @@ export interface QualitySettings {
   anisotropy: number;
   particles: number;
   decals: number;
+  /** Reserved: post-processing is not wired up yet (no DefaultRenderingPipeline). */
   bloom: boolean;
   fxaa: boolean;
   /** Draw distance for the fog / far plane. */

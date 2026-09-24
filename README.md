@@ -194,7 +194,9 @@ motion at 3 fps; on any GPU it is invisible.
 ## Verified, not assumed
 
 `verify/` holds the Playwright harnesses used while building this, and they were run against the
-real game with a software GL renderer:
+real game with a software GL renderer. They ship with the repo so the numbers below can be
+re-measured: `npm install --no-save playwright && npx playwright install --with-deps chromium`,
+start the game, then `node verify/regression.mjs`. See `verify/README.md`.
 
 - `functional.mjs` — 14/14 passing: fire consumes a round and plays `FireRifle`, decals spawn,
   reload refills, crouch engages, ADS narrows FOV to 48°, barrels detonate, death plays `Dying`,
@@ -205,6 +207,11 @@ real game with a software GL renderer:
   weapon orientation all came out of this.
 - `barrel.mjs` — asserts the rifle is horizontal (pitch −4°), pointing forward (10° off facing),
   and gripped 0.23 m from its centre — the intended 30%-from-muzzle hold.
+- `regression.mjs` — 15/15 passing on both the dev server and the production build. It presses each
+  movement key and checks the *measured* travel direction against the camera's view axis, samples
+  leg-bone quaternions across idle → walk → sprint → stop to prove the skeleton is moving, and reads
+  the rifle's barrel direction against the character's facing. This is the harness that pinned the
+  three "movement is reversed / the gun is reversed / nothing animates" reports.
 
 Bugs these caught that guesswork would not have:
 
@@ -219,11 +226,61 @@ Bugs these caught that guesswork would not have:
    barrel geometry is thinnest (a muzzle is a tube, a stock is a wedge), not by guessing from the
    pivot.
 
+### The reported "everything is reversed / nothing animates" bug
+
+Three symptoms, three unrelated causes — each measured before being changed:
+
+1. **Movement was mirrored.** `camera.facing` was computed by hand as `-(sin yaw, cos yaw)`, which is
+   the opposite of where the camera looks, and the player drives movement from it. It now derives
+   from the camera's own view vector, so it cannot drift out of sync. Measured: `dot(view, travel)`
+   went from −1.000 (exactly backwards) to 1.000 for W, S and D.
+2. **The rifle pointed backwards.** Two compounding faults. The alignment targeted the character's
+   local −Z (a Three.js habit) while this model's visual forward is its local **+Z** — verified by
+   rendering it at `rotation.y = 0` and photographing which side the face is on. And the mount was
+   solved once from the rest pose, so the arm animation carried the rifle away from the solve.
+3. **Nothing animated.** `setLocomotion()` only wrote targets for clips present in the new blend, so
+   a clip leaving the blend kept its old target of 1 forever. Two contradictory full-body clips at
+   full weight average into a mush that reads as a frozen character while every layer still reports
+   `weight: 1, isPlaying: true`. Unnamed layers are now ramped back to zero.
+
+A fourth one surfaced while testing the first three: **horizontal look was inverted**, so moving the
+mouse right swung the camera left (`yaw -= look.x`). Yaw *increases* clockwise seen from above — the
+camera's right vector at yaw 0 is +X — so looking right means adding to yaw. Mouse-down already
+looked down correctly, which made the mismatched horizontal axis easy to miss. `regression.mjs` now
+asserts both axes against the camera's own basis.
+
+### Babylon pitfalls this cost real time on
+
+- **`TransformNode.rotationQuaternion.copyFrom(q)` does not dirty the node.** Only the *setter*
+  marks it for recomposition, so writing into the existing quaternion leaves the cached world matrix
+  in place. The weapon "reversed itself" for exactly this reason: the rotation was applied once at
+  attach time and every later write was silently discarded. Assign a fresh `Quaternion` instead.
+- **`Quaternion` and `Matrix` products disagree about operand order.** The same expression —
+  `inverse(localBasis) * inverse(handRotation) * desiredWorld` — mounted the rifle perfectly as three
+  quaternion `multiply` calls and pointed it straight up when composed as matrices. All twelve
+  plausible orderings were measured in-engine and the winner is the one in the code.
+- **`Matrix.invert()` mutates its operand**; `Matrix.Invert(m)` returns a new matrix. Mixing them up
+  silently corrupts the matrix in `A.invert().multiply(B)`.
+- **Align attachments after the skeleton, not during gameplay.** Solving the rifle mount inside the
+  normal update reads a hand matrix from the previous frame's pose, which is invisible when standing
+  still and up to 20° of error while running. It is now recomputed from
+  `onAfterAnimationsObservable`.
+- **The camera orbit centre was 1.6 m above the character's head.** The camera adds a fixed 1.55 m to
+  its target's position, which was correct when that position was the feet; it is now the eye point,
+  so the offset double-counted and the pivot sat at 3.43 m. Measured, that left the character 33° off
+  the view axis at hip and entirely outside the frustum while aiming. With the pivot at head height
+  and a 0.34 m aiming shoulder offset, the character stays framed in both.
+
 ## Roadmap
 
 The vertical slice is single-player, as scoped. Natural next steps, in order: AI targets using the
 `Dying`/`KnockedOut` clips (the health metadata path is already wired), then networked play via
 Colyseus or a WebSocket tick server — for which the character controller would move server-side.
+
+One known gap: the pack has no dedicated aim-down-sights pose (the clip list jumps from `RifleIdle`
+to `FireRifle`), so aiming keeps the low-ready arm pose while the camera zooms. The barrel is
+verified to point exactly along the character's forward in every state; a raised-sights pose would
+need either a new clip or a procedural arm adjustment.
 
 ## Credits
 

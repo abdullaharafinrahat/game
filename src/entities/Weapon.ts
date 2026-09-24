@@ -30,7 +30,7 @@ import type { GameAudio } from '../core/Audio';
 import type { ThirdPersonCamera } from '../core/ThirdPersonCamera';
 import type { InputManager } from '../input/InputManager';
 import type { AnimationController } from './AnimationController';
-import { WEAPON } from '../config';
+import { WEAPON, type QualitySettings } from '../config';
 
 export interface WeaponEvents {
   onAmmo(mag: number, reserve: number): void;
@@ -53,12 +53,12 @@ interface Tracer {
 }
 
 /**
- * Mount tuning. The *orientation* is solved at attach time rather than
- * hardcoded: this rig's hand bone inherits a rotated, 0.01-scaled armature, so
- * a fixed Euler offset that looks right on one rig comes out sideways on the
- * next. Instead the pivot's local rotation is computed as
- * `inverse(boneWorldRotation) * desiredWorldRotation`, which pins the barrel to
- * the character's own facing regardless of how the skeleton is authored.
+ * Mount tuning. The orientation is *solved*, never hardcoded: this rig's hand
+ * bone inherits a rotated, 0.01-scaled armature, so a fixed Euler offset that
+ * suits one rig comes out sideways on the next. The pivot's local rotation is
+ * recomputed every frame from the live hand matrix (see `alignToCharacter`), so
+ * the rifle stays pointing along the character's visual forward while the arm
+ * animation moves underneath it.
  */
 const GRIP = {
   /** Rifle length in meters after normalisation (a sniper is ~1.2 m). */
@@ -126,6 +126,18 @@ export class Weapon {
   private model: Mesh | null = null;
   private pivot: TransformNode | null = null;
   private muzzle: TransformNode | null = null;
+  /** Hand bone the rifle rides on. */
+  private handNode: TransformNode | null = null;
+  /**
+   * The node that represents which way the character is *facing* — i.e. the one
+   * gameplay sets `rotation.y` on. It must NOT be the GLB's root node: that one
+   * carries its own export rotation (the Blender fix-up), so `glbRoot.forward`
+   * points somewhere other than where the model actually looks. Earlier this
+   * used the GLB root and the rifle ended up 180 degrees out at idle.
+   */
+  private facingNode: TransformNode | null = null;
+  /** Rifle geometry axes, captured at attach time for the per-frame solve. */
+  private mount: { barrelAxis: 'x' | 'y' | 'z'; upAxis: 'x' | 'y' | 'z'; muzzleSign: 1 | -1 } | null = null;
   private flash: Mesh | null = null;
   private flashLight: PointLight | null = null;
   private sparks: ParticleSystem | null = null;
@@ -146,7 +158,91 @@ export class Weapon {
     private readonly camera: ThirdPersonCamera,
     private readonly audio: GameAudio,
     private readonly events: WeaponEvents,
+    /** Live tier lookup: the Game swaps the settings object when the tier changes. */
+    private readonly quality: () => QualitySettings,
   ) {}
+
+  /** Decal + spark budgets scale with the tier. */
+  private get limits(): { decals: number; particles: number } {
+    const settings = this.quality();
+    return { decals: settings.decals, particles: settings.particles };
+  }
+
+  /**
+   * Points the rifle along the character's visual forward axis and keeps it
+   * level, for the CURRENT hand pose.
+   *
+   * This runs every frame rather than once at attach time. Solving it once
+   * (from the rest pose) leaves a fixed offset that the arm animation then
+   * carries away — measured at 10-40 degrees of drift, which is what "the gun
+   * has been reversed" looked like. Re-solving per frame makes the rifle behave
+   * like an attachment constraint: it stays forward and level in every clip.
+   */
+  /** Keeps the mount aligned after each frame's skeleton update. */
+  private readonly alignObserver = (): void => {
+    this.alignToCharacter();
+  };
+
+  /** Tells the weapon which node defines the character's facing direction. */
+  setFacingNode(node: TransformNode): void {
+    this.facingNode = node;
+    this.alignToCharacter();
+  }
+
+  private alignToCharacter(): void {
+    const { pivot, handNode, facingNode, mount } = this;
+    if (!pivot || !handNode || !facingNode || !mount) return;
+
+    handNode.computeWorldMatrix(true);
+    facingNode.computeWorldMatrix(true);
+
+    const handScale = new Vector3();
+    const handRotation = new Quaternion();
+    handNode.getWorldMatrix().decompose(handScale, handRotation);
+
+    const axisVector = (axis: 'x' | 'y' | 'z', sign: number) =>
+      new Vector3(axis === 'x' ? sign : 0, axis === 'y' ? sign : 0, axis === 'z' ? sign : 0);
+    const localBarrel = axisVector(mount.barrelAxis, mount.muzzleSign);
+    const localUp = axisVector(mount.upAxis, 1);
+    const localThird = Vector3.Cross(localBarrel, localUp).normalize();
+
+    // Desired world orientation: barrel along the character's visual forward
+    // (its own +Z, flattened so the rifle stays level on slopes), up to the sky.
+    const forwardWorld = facingNode.forward.clone();
+    forwardWorld.y = 0;
+    forwardWorld.normalize();
+    if (forwardWorld.lengthSquared() < 0.5) forwardWorld.set(0, 0, 1);
+
+    // Composition order is NOT derivable from the docs (Babylon uses row-vector
+    // matrices, `Matrix.multiply` mutates in place, and `Quaternion.multiply`
+    // composes as "this, then argument"), so all twelve plausible orderings were
+    // measured in-engine and this one alone came out with the barrel exactly
+    // along forward and pitch 0.0:
+    //     pivot = localBasis⁻¹ · handRotation⁻¹ · desiredWorld
+    // `Matrix.Invert` (not `.invert()`) — the latter mutates its operand.
+    const localBasis = Matrix.Identity();
+    Matrix.FromXYZAxesToRef(localBarrel, localUp, localThird, localBasis);
+    const desiredBasis = Matrix.Identity();
+    Matrix.FromXYZAxesToRef(forwardWorld, Vector3.Up(), Vector3.Cross(forwardWorld, Vector3.Up()).normalize(), desiredBasis);
+
+    // Composed with quaternions exactly as measured: Babylon's Quaternion and
+    // Matrix products do NOT agree on operand order, and the matrix form of this
+    // same expression pointed the rifle straight up.
+    const localQuat = Quaternion.FromRotationMatrix(Matrix.Invert(localBasis))
+      .multiply(Quaternion.Inverse(handRotation))
+      .multiply(Quaternion.FromRotationMatrix(desiredBasis));
+    if (GRIP.mountTweak.lengthSquared() > 0) {
+      const tweak = Quaternion.RotationYawPitchRoll(GRIP.mountTweak.y, GRIP.mountTweak.x, GRIP.mountTweak.z);
+      localQuat.multiplyInPlace(Quaternion.Inverse(tweak));
+    }
+
+    // Assign through the SETTER every frame. Writing into the existing
+    // quaternion with copyFrom() mutates it without notifying the TransformNode,
+    // so the cached world matrix is never recomposed and the rifle silently
+    // keeps its rest-pose orientation while the arm animates under it — which is
+    // exactly what "the gun has been reversed" looked like.
+    pivot.rotationQuaternion = localQuat;
+  }
 
   /** The rifle mesh, once mounted (also used by the dev measurement tools). */
   get modelMesh(): Mesh | null {
@@ -210,56 +306,16 @@ export class Weapon {
     const handUnit = Math.abs(handScale.x) > 1e-6 ? handScale.x : 1;
     this.pivot.scaling.setAll(1 / handUnit);
 
-    // --- Solve the mount orientation -------------------------------------
-    // Goal: the rifle's local barrel axis points where the character faces, and
-    // its local up axis points at the sky, whatever the hand bone is doing.
-    //
-    // Both frames are built as orthonormal bases and related by a change of
-    // basis: R = B_local^-1 * B_world (row-vector convention). Mixing that order
-    // up leaves the rifle pointing at the sky, which is exactly what the first
-    // attempt did.
-    const axisVector = (axis: 'x' | 'y' | 'z', sign: number) =>
-      new Vector3(axis === 'x' ? sign : 0, axis === 'y' ? sign : 0, axis === 'z' ? sign : 0);
-
-    const localBarrel = axisVector(barrelAxis, muzzleSign);
-    const localUp = axisVector(upAxis, 1);
-    const localThird = Vector3.Cross(localBarrel, localUp).normalize();
-
-    const rootWorld = character.root.getWorldMatrix();
-    const upWorld = Vector3.Up();
-    // Keep the rifle level: flatten the facing vector before using it.
-    const forwardWorld = Vector3.TransformNormal(new Vector3(0, 0, -1), rootWorld);
-    forwardWorld.y = 0;
-    forwardWorld.normalize();
-    if (forwardWorld.lengthSquared() < 0.5) forwardWorld.set(0, 0, -1);
-    const thirdWorld = Vector3.Cross(forwardWorld, upWorld).normalize();
-
-    // Map the rifle's own axes onto that frame.
-    const localBasis = Matrix.Identity();
-    Matrix.FromXYZAxesToRef(localBarrel, localUp, localThird, localBasis);
-    const worldBasis = Matrix.Identity();
-    Matrix.FromXYZAxesToRef(forwardWorld, upWorld, thirdWorld, worldBasis);
-    // A reflection cannot be a rotation: flip the third axis if handedness
-    // disagrees between the two bases.
-    if (localBasis.determinant() * worldBasis.determinant() < 0) {
-      Matrix.FromXYZAxesToRef(forwardWorld, upWorld, thirdWorld.scale(-1), worldBasis);
-    }
-
-    // Babylon composes rotations as "apply A then B" for `A.multiply(B)`, and
-    // the pivot sits *above* the hand, so the world rotation is
-    // R_pivot * R_hand. Solving R_pivot * R_hand = R_desired gives
-    // R_pivot = R_desired * R_hand^-1.
-    const composed = localBasis.invert().multiply(worldBasis);
-    const desiredWorld = Quaternion.FromRotationMatrix(composed);
-    const localQuat = desiredWorld.multiply(Quaternion.Inverse(handRotation));
-
-    // Optional hand-space tweak, applied last.
-    if (GRIP.mountTweak.lengthSquared() > 0) {
-      const tweak = Quaternion.RotationYawPitchRoll(GRIP.mountTweak.y, GRIP.mountTweak.x, GRIP.mountTweak.z);
-      localQuat.multiplyInPlace(Quaternion.Inverse(tweak));
-    }
-    if (!this.pivot.rotationQuaternion) this.pivot.rotationQuaternion = localQuat;
-    else this.pivot.rotationQuaternion.copyFrom(localQuat);
+    this.handNode = handNode;
+    this.facingNode = this.facingNode ?? character.root;
+    this.mount = { barrelAxis, upAxis, muzzleSign };
+    // Orient the rifle for the current pose, then keep re-solving it *after the
+    // skeleton animates* each frame. Solving during the gameplay update reads a
+    // hand matrix from the previous frame's pose, which leaves the rifle lagging
+    // the arm by up to ~20 degrees while walking (idle looked perfect because a
+    // static pose hides the lag entirely).
+    this.alignToCharacter();
+    this.scene.onAfterAnimationsObservable.add(this.alignObserver);
 
     this.pivot.position.copyFrom(GRIP.position);
 
@@ -424,7 +480,7 @@ export class Weapon {
     this.spawnSparks(point, normal, meta.surface === 'metal' ? 1.5 : 1);
 
     if (!mesh) return;
-    if (this.decals.length < WEAPON.maxDecals) this.spawnDecal(point, normal);
+    if (this.decals.length < this.limits.decals) this.spawnDecal(point, normal);
 
     // Dynamic props get knocked around — that is what makes the sandbox fun.
     const body = mesh.physicsBody;
@@ -473,7 +529,7 @@ export class Weapon {
     decal.lookAt(point.add(normal));
     decal.rotation.z = Math.random() * Math.PI * 2;
     this.decals.push(decal);
-    while (this.decals.length > WEAPON.maxDecals) {
+    while (this.decals.length > this.limits.decals) {
       const oldest = this.decals.shift();
       oldest?.material?.dispose();
       oldest?.dispose();
@@ -485,7 +541,9 @@ export class Weapon {
     this.sparks.emitter = point.add(normal.scale(0.06));
     this.sparks.direction1 = normal.scale(2.4).add(new Vector3(-1.3, -1.3, -1.3));
     this.sparks.direction2 = normal.scale(3.6).add(new Vector3(1.3, 1.3, 1.3));
-    this.sparks.manualEmitCount = Math.round(10 * strength);
+    // 12 / 24 / 40 particles per tier -> a visible spark burst that still fits
+    // on a low-end phone.
+    this.sparks.manualEmitCount = Math.max(4, Math.round(this.limits.particles * 0.6 * strength));
     this.sparks.start();
   }
 
@@ -500,7 +558,7 @@ export class Weapon {
     ctx.fillRect(0, 0, 32, 32);
     this.sparkTexture.update();
 
-    this.sparks = new ParticleSystem('sparks', 240, this.scene);
+    this.sparks = new ParticleSystem('sparks', 320, this.scene);
     this.sparks.particleTexture = this.sparkTexture;
     this.sparks.emitter = Vector3.Zero();
     this.sparks.minSize = 0.02;

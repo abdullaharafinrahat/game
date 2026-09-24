@@ -67,8 +67,19 @@ export class AnimationController {
     return this.override !== null;
   }
 
-  /** Blend weights (0..1) and playback rates for the locomotion clips. */
+  /**
+   * Blend weights (0..1) and playback rates for the locomotion clips.
+   *
+   * Every layer NOT named in `weights` is ramped back to zero first. Without
+   * this, a clip that leaves the blend (walking -> sprinting drops Walk, and
+   * RifleIdle when you start moving) keeps its old target of 1 forever: two
+   * contradictory full-body clips then average into a mush that reads as "the
+   * animation stopped", while each layer still reports weight 1 and isPlaying.
+   */
   setLocomotion(weights: Record<string, number>, speedRatios: Record<string, number> = {}): void {
+    for (const [name, layer] of this.layers) {
+      if (!(name in weights)) layer.target = 0;
+    }
     for (const [name, target] of Object.entries(weights)) {
       const layer = this.ensure(name);
       if (!layer) continue;
@@ -178,9 +189,11 @@ export class AnimationController {
       }
       if (layer.weight > 0.001 && !layer.active) {
         layer.group.loopAnimation = true;
+        // Play every locomotion clip from the same phase so cycles line up as
+        // they cross-fade, without tying their animatables together (see the
+        // note on phase syncing above).
         layer.group.start(true);
         layer.active = true;
-        this.syncPhases();
       }
       if (layer.active) {
         if (Math.abs(layer.group.speedRatio - layer.speedRatio) > 1e-3) layer.group.speedRatio = layer.speedRatio;
@@ -189,23 +202,16 @@ export class AnimationController {
     }
   }
 
-  /**
-   * Phase-aligns every running locomotion clip so their cycles stay in step
-   * even though their lengths differ (Walk 1.03 s vs Sprint 0.52 s).
-   */
-  private syncPhases(): void {
-    const running = [...this.layers.values()].filter((l) => l.active);
-    if (running.length < 2) return;
-    const master = running[0].group.animatables[0];
-    if (!master) return;
-    for (const layer of running.slice(1)) {
-      try {
-        layer.group.syncAllAnimationsWith(master);
-      } catch {
-        /* sync is best-effort: a mismatch must never break playback */
-      }
-    }
-  }
+  // NOTE: locomotion clips are deliberately NOT phase-synchronised.
+  //
+  // An earlier version called `syncAllAnimationsWith(master)` on every running
+  // layer. That method takes a *source animatable* and ties the group's
+  // animatables to it; because the caller re-ran it whenever a layer started,
+  // the followers ended up linked to a stopped master and the whole blend
+  // collapsed — the layers still reported weight 1 and `isPlaying: true`, but
+  // the bones stopped moving. The clips have different cycle lengths (Walk
+  // 1.03 s vs Sprint 0.52 s) and blending between them reads fine without
+  // locking their phases.
 
   /** Drops every running clip back to the idle pose (respawn, death, reset). */
   resetTo(weights: Record<string, number>): void {

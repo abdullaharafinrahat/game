@@ -33,9 +33,19 @@ export interface Environment {
   shadowGenerator: ShadowGenerator | null;
   sky: Mesh;
   addShadowCaster(mesh: AbstractMesh | AbstractMesh[]): void;
+  /**
+   * Keeps the shadow frustum centred on the player. With `autoUpdateExtends`
+   * Babylon would size the frustum to every caster in the scene — on a 260 m map
+   * that spreads a 2048px map over 260 m and the shadows dissolve, so the
+   * frustum is fixed-size and moved instead.
+   */
+  updateShadowFocus(position: Vector3): void;
   refreshEnvironment(): void;
   dispose(): void;
 }
+
+/** Half-width of the shadow frustum, in meters. */
+const SHADOW_RADIUS = 32;
 
 export function createEnvironment(scene: Scene, quality: QualitySettings): Environment {
   // --- Sky dome -----------------------------------------------------------
@@ -69,19 +79,42 @@ export function createEnvironment(scene: Scene, quality: QualitySettings): Envir
   sun.intensity = 2.5;
   sun.diffuse = new Color3(1, 0.96, 0.88);
   if (quality.shadows) {
+    // Fixed frustum, moved with the player (see updateShadowFocus).
+    sun.autoUpdateExtends = false;
+    sun.autoCalcShadowZBounds = false;
+    sun.shadowOrthoScale = 1;
+    sun.orthoLeft = -SHADOW_RADIUS;
+    sun.orthoRight = SHADOW_RADIUS;
+    sun.orthoTop = SHADOW_RADIUS;
+    sun.orthoBottom = -SHADOW_RADIUS;
     sun.shadowMinZ = 1;
-    sun.shadowMaxZ = 160;
+    sun.shadowMaxZ = 200;
   }
 
   let shadowGenerator: ShadowGenerator | null = null;
   if (quality.shadows) {
-    shadowGenerator = new ShadowGenerator(quality.shadowMapSize, sun);
-    shadowGenerator.useBlurExponentialShadowMap = true;
-    shadowGenerator.blurKernel = 24;
-    shadowGenerator.depthScale = 40;
-    shadowGenerator.setDarkness(0.45);
-    shadowGenerator.bias = 0.006;
-    shadowGenerator.normalBias = 0.02;
+    // Shadows are a nicety, never a hard requirement: if the shadow generator
+    // cannot be built (a missing side-effect import, a driver quirk) the scene
+    // continues unlit rather than showing the player an error screen.
+    try {
+      shadowGenerator = new ShadowGenerator(quality.shadowMapSize, sun);
+      // These numbers are measured, not guessed. Exponential shadow maps are
+      // extremely sensitive to `depthScale`: at 40 the exponential falloff goes
+      // so light that the shadows vanish outright, and a large `normalBias`
+      // (0.02) pushes the surface away and erases the contact shadow under a
+      // character. verify/shadow-experiment.mjs sweeps the combinations and
+      // reports frame-luminance deltas — the current values darken the shadowed
+      // ground by ~18% while 40/0.02 darkened it by 0.00%.
+      shadowGenerator.useBlurExponentialShadowMap = true;
+      shadowGenerator.blurKernel = 8;
+      shadowGenerator.depthScale = 30;
+      shadowGenerator.setDarkness(0.25);
+      shadowGenerator.bias = 0.0008;
+      shadowGenerator.normalBias = 0.004;
+    } catch (error) {
+      console.warn('[environment] shadows unavailable, continuing without them:', error);
+      shadowGenerator = null;
+    }
   }
 
   // --- Environment lighting (IBL) ----------------------------------------
@@ -98,6 +131,7 @@ export function createEnvironment(scene: Scene, quality: QualitySettings): Envir
   sunDisc.lookAt(Vector3.Zero());
 
   let probe: ReflectionProbe | null = null;
+  // Same reasoning as the shadows above: image-based lighting is optional.
   try {
     probe = new ReflectionProbe('envProbe', 128, scene, true);
     probe.renderList?.push(sky, sunDisc);
@@ -122,6 +156,12 @@ export function createEnvironment(scene: Scene, quality: QualitySettings): Envir
       }
       shadowGenerator?.getShadowMap()?.renderList?.push(...list);
       for (const m of list) m.receiveShadows = true;
+    },
+    updateShadowFocus(position: Vector3) {
+      if (!shadowGenerator) return;
+      // Same offset as the light's initial placement, so the light direction is
+      // unchanged and only the frustum moves.
+      sun.position.set(position.x + 42, position.y + 78, position.z - 34);
     },
     refreshEnvironment() {
       if (probe) probe.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;

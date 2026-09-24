@@ -17,7 +17,7 @@ import type { AssetLibrary } from '../core/Assets';
 import type { GameAudio } from '../core/Audio';
 import type { ThirdPersonCamera } from '../core/ThirdPersonCamera';
 import type { InputManager } from '../input/InputManager';
-import { CLIP_STRIDE, GAME, MOVE, PLAYER } from '../config';
+import { CLIP_STRIDE, GAME, MOVE, PLAYER, type QualitySettings } from '../config';
 
 export type Stance = 'unarmed' | 'rifle';
 
@@ -68,6 +68,7 @@ export class Player {
     private readonly audio: GameAudio,
     private readonly events: PlayerEvents,
     spawn: Vector3,
+    quality: () => QualitySettings,
   ) {
     // Park the whole loaded hierarchy under one node so a single transform
     // drives the character. The model is lifted by its measured foot offset so
@@ -93,8 +94,11 @@ export class Player {
     this.controller.maxCastIterations = 8;
 
     this.animation = new AnimationController(library);
-    this.weapon = new Weapon(scene, camera, audio, events.weapon);
+    this.weapon = new Weapon(scene, camera, audio, events.weapon, quality);
     this.weapon.attach(library, library.character);
+    // `this.root` is the node whose rotation.y *is* the facing direction, so it
+    // is the correct reference frame for the rifle's alignment.
+    this.weapon.setFacingNode(this.root);
     this.respawnPoint.copyFrom(spawn);
     this.syncVisual();
   }
@@ -295,11 +299,17 @@ export class Player {
     const set = LOCOMOTION_SETS[this.stance];
     this.speed = Math.hypot(this.velocity.x, this.velocity.z);
 
-    const aimFacing = this.camera.facing;
+    // The character's visual forward is its own local +Z (confirmed by
+    // rendering it with rotation.y = 0: a camera on the -Z side sees its back).
+    // So the yaw that points the model along a direction d is atan2(d.x, d.z)
+    // — the old `+ Math.PI` turned the model to face away from wherever it was
+    // heading, which then made the hand-held rifle point backwards too.
     if (aiming || this.speed < 0.15) {
-      this.facingAngle = Math.atan2(aimFacing.x, aimFacing.z) + Math.PI;
+      // Standing still or aiming: face where the camera looks. yaw is exactly
+      // the angle of the view direction, so it can be used directly.
+      this.facingAngle = this.camera.yaw;
     } else if (forwardInput !== 0 && this.speed > 0.2) {
-      this.facingAngle = Math.atan2(this.velocity.x, this.velocity.z) + Math.PI;
+      this.facingAngle = Math.atan2(this.velocity.x, this.velocity.z);
     }
 
     const walkSpeed = this.strideFor(set.walk) || MOVE.walk;
