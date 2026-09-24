@@ -1,0 +1,575 @@
+/* ------------------------------------------------------------------ base */
+:root {
+  --bg: #0b0e11;
+  --panel: rgba(12, 15, 19, 0.92);
+  --line: rgba(255, 255, 255, 0.12);
+  --text: #e7ecf0;
+  --muted: #93a1ad;
+  --accent: #ffb347;
+  --danger: #ff5c47;
+  --ok: #7ddf8f;
+  --spread: 9px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#renderCanvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+  touch-action: none;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.accent {
+  color: var(--accent);
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  margin: 0 2px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+}
+
+/* --------------------------------------------------------- overlays/panels */
+#loading,
+#start,
+#pause,
+#error {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 35%, rgba(24, 30, 38, 0.94), rgba(6, 8, 10, 0.97));
+  backdrop-filter: blur(6px);
+  z-index: 40;
+  padding: 20px;
+}
+
+.panel {
+  width: min(560px, 100%);
+  max-height: 92vh;
+  overflow: auto;
+  padding: 26px 28px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+  text-align: left;
+}
+
+.panel h1 {
+  margin: 0 0 4px;
+  font-size: 34px;
+  letter-spacing: 6px;
+}
+
+.panel h2 {
+  margin: 0 0 18px;
+  font-size: 20px;
+  letter-spacing: 4px;
+}
+
+.panel .sub {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+button {
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 1px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+}
+
+button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+button.primary {
+  width: 100%;
+  margin: 18px 0 6px;
+  padding: 16px;
+  font-size: 15px;
+  letter-spacing: 3px;
+  color: #10141a;
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 700;
+}
+
+button.primary:hover {
+  background: #ffc266;
+}
+
+button.active {
+  background: rgba(255, 179, 71, 0.22);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* loading bar */
+.bar {
+  height: 6px;
+  margin: 18px 0 12px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+
+.bar > div {
+  height: 100%;
+  width: 0%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #ffb347, #ff7a45);
+  transition: width 0.25s ease-out;
+}
+
+/* controls list */
+.controls-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.controls-grid > div:nth-child(odd) {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* settings */
+.setting {
+  margin: 16px 0;
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.setting > label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.setting output {
+  color: var(--accent);
+  text-transform: none;
+}
+
+.setting input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.setting.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.segmented {
+  display: flex;
+  gap: 6px;
+}
+
+.segmented button {
+  flex: 1;
+  padding: 8px 0;
+  font-size: 11px;
+}
+
+/* ------------------------------------------------------------------- HUD */
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.hud-corner {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.hud-topleft {
+  top: 14px;
+  left: 16px;
+  color: var(--muted);
+}
+
+.hud-topright {
+  top: 14px;
+  right: 16px;
+  pointer-events: auto;
+}
+
+.hud-topright button {
+  width: 38px;
+  height: 32px;
+  padding: 0;
+  opacity: 0.75;
+}
+
+.hud-bottomleft {
+  bottom: 20px;
+  left: 16px;
+}
+
+.hud-bottomright {
+  bottom: 20px;
+  right: 16px;
+  align-items: flex-end;
+}
+
+.healthbar {
+  width: 190px;
+  height: 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+#healthFill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, var(--ok), #b8e986);
+  transition: width 0.2s ease-out, background 0.3s;
+}
+
+.ammo {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+#ammoMag {
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+#ammoReserve {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+#reloadHint {
+  color: var(--accent);
+  animation: blink 0.8s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* crosshair */
+#crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+}
+
+.ch-line {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.9);
+}
+
+.ch-top,
+.ch-bottom {
+  width: 2px;
+  height: 8px;
+  left: -1px;
+}
+
+.ch-left,
+.ch-right {
+  width: 8px;
+  height: 2px;
+  top: -1px;
+}
+
+.ch-top {
+  transform: translateY(calc(-1 * var(--spread) - 8px));
+}
+
+.ch-bottom {
+  transform: translateY(var(--spread));
+}
+
+.ch-left {
+  transform: translateX(calc(-1 * var(--spread) - 8px));
+}
+
+.ch-right {
+  transform: translateX(var(--spread));
+}
+
+.ch-dot {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  left: -1px;
+  top: -1px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+#hitmarker {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+#hitmarker.show {
+  opacity: 1;
+}
+
+#hitmarker span {
+  position: absolute;
+  width: 9px;
+  height: 2px;
+  background: #fff;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.9);
+}
+
+#hitmarker span:nth-child(1) {
+  transform: rotate(45deg) translate(-11px, -11px);
+}
+#hitmarker span:nth-child(2) {
+  transform: rotate(-45deg) translate(11px, -11px);
+}
+#hitmarker span:nth-child(3) {
+  transform: rotate(45deg) translate(11px, 11px);
+}
+#hitmarker span:nth-child(4) {
+  transform: rotate(-45deg) translate(-11px, 11px);
+}
+
+#hitmarker.kill span {
+  background: var(--danger);
+}
+
+#toast {
+  position: absolute;
+  top: 22%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(10, 12, 15, 0.85);
+  color: var(--text);
+}
+
+#debug {
+  position: absolute;
+  top: 92px;
+  left: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(8, 10, 12, 0.75);
+  color: var(--ok);
+  white-space: pre;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+#damageVignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(circle at 50% 50%, transparent 45%, rgba(180, 20, 20, 0.55) 100%);
+  transition: opacity 0.35s ease-out;
+}
+
+/* ------------------------------------------------------- touch controls */
+.touch-controls {
+  position: fixed;
+  inset: 0;
+  display: none;
+  pointer-events: none;
+  z-index: 25;
+}
+
+.touch-controls.visible {
+  display: block;
+}
+
+.touch-look {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 55%;
+  height: 100%;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.touch-stick {
+  position: absolute;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: max(24px, env(safe-area-inset-bottom));
+  width: 148px;
+  height: 148px;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.touch-stick-base {
+  position: absolute;
+  inset: 22px;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.touch-stick-knob {
+  position: absolute;
+  width: 52px;
+  height: 52px;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.32);
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  transform: translate(-50%, -50%);
+}
+
+.touch-buttons {
+  position: absolute;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.touch-btn {
+  min-width: 74px;
+  padding: 14px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #fff;
+  font-size: 11px;
+  letter-spacing: 1px;
+  touch-action: none;
+}
+
+.touch-btn-sm {
+  min-width: 66px;
+  padding: 11px 8px;
+  font-size: 10px;
+  opacity: 0.9;
+}
+
+.touch-btn-fire {
+  grid-column: span 2;
+  padding: 22px 10px;
+  font-size: 15px;
+  background: rgba(255, 92, 71, 0.32);
+  border-color: rgba(255, 92, 71, 0.6);
+}
+
+.touch-btn.pressed {
+  background: rgba(255, 179, 71, 0.4);
+  border-color: var(--accent);
+}
+
+.touch-btn.active {
+  background: rgba(255, 179, 71, 0.3);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Coarse pointers get the big HUD numbers pulled in slightly. */
+@media (max-width: 720px) {
+  .panel {
+    padding: 20px;
+  }
+  .panel h1 {
+    font-size: 26px;
+    letter-spacing: 4px;
+  }
+  .healthbar {
+    width: 130px;
+  }
+  #ammoMag {
+    font-size: 24px;
+  }
+  .hud-bottomleft,
+  .hud-bottomright {
+    bottom: 120px;
+  }
+}

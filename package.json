@@ -1,0 +1,28 @@
+{
+  "name": "crass-game",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Third-person web shooter built on the crass optimized_assets pack (Babylon.js + Havok)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "tsc --noEmit",
+    "assets": "node tools/fetch-assets.mjs",
+    "assets:check": "node tools/check-assets.mjs"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^8.30.0",
+    "@babylonjs/havok": "^1.3.10",
+    "@babylonjs/loaders": "^8.56.2"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "^4.5.0",
+    "@gltf-transform/extensions": "^4.5.0",
+    "@gltf-transform/functions": "^4.5.0",
+    "sharp": "^0.34.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0"
+  }
+}

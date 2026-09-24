@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b0e11" />
+    <title>CRASS — third-person sandbox</title>
+  </head>
+  <body>
+    <canvas id="renderCanvas" touch-action="none"></canvas>
+
+    <!-- ---------------------------------------------------------------- HUD -->
+    <div id="hud" class="hidden">
+      <div id="damageVignette"></div>
+
+      <div id="crosshair">
+        <span class="ch-line ch-top"></span>
+        <span class="ch-line ch-bottom"></span>
+        <span class="ch-line ch-left"></span>
+        <span class="ch-line ch-right"></span>
+        <span class="ch-dot"></span>
+      </div>
+      <div id="hitmarker">
+        <span></span><span></span><span></span><span></span>
+      </div>
+
+      <div class="hud-corner hud-topleft">
+        <div id="fps">-- fps</div>
+        <div id="stance">RIFLE</div>
+        <div id="speed">0.0 m/s</div>
+      </div>
+
+      <div class="hud-corner hud-topright">
+        <button id="pauseBtn" type="button" aria-label="Pause">❚❚</button>
+      </div>
+
+      <div class="hud-corner hud-bottomleft">
+        <div id="healthLabel">HEALTH</div>
+        <div class="healthbar"><div id="healthFill"></div></div>
+      </div>
+
+      <div class="hud-corner hud-bottomright">
+        <div id="weaponName">SNIPER</div>
+        <div class="ammo"><span id="ammoMag">5</span><span id="ammoReserve">/ 25</span></div>
+        <div id="reloadHint" class="hidden">RELOADING</div>
+      </div>
+
+      <div id="toast" class="hidden"></div>
+      <div id="debug" class="hidden"></div>
+    </div>
+
+    <!-- ------------------------------------------------------------ LOADING -->
+    <div id="loading">
+      <div class="panel">
+        <h1>CRASS<span class="accent">.</span></h1>
+        <p class="sub">third-person sandbox · babylon.js + havok</p>
+        <div class="bar"><div id="loadingBar"></div></div>
+        <p id="loadingLabel">Booting engine…</p>
+        <p id="loadingDetail" class="muted small"></p>
+      </div>
+    </div>
+
+    <!-- -------------------------------------------------------------- START -->
+    <div id="start" class="hidden">
+      <div class="panel">
+        <h1>CRASS<span class="accent">.</span></h1>
+        <p id="startStats" class="muted small"></p>
+        <button id="playBtn" class="primary" type="button">CLICK TO PLAY</button>
+        <div class="controls-grid">
+          <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></div><div>Move</div>
+          <div><kbd>Mouse</kbd></div><div>Look</div>
+          <div><kbd>Shift</kbd></div><div>Sprint</div>
+          <div><kbd>Space</kbd></div><div>Jump</div>
+          <div><kbd>Ctrl</kbd> / <kbd>C</kbd></div><div>Crouch</div>
+          <div><kbd>LMB</kbd></div><div>Fire</div>
+          <div><kbd>RMB</kbd></div><div>Aim down sights</div>
+          <div><kbd>R</kbd></div><div>Reload</div>
+          <div><kbd>Wheel</kbd></div><div>Camera distance</div>
+          <div><kbd>Esc</kbd></div><div>Pause / release mouse</div>
+          <div><kbd>F3</kbd></div><div>Debug overlay</div>
+          <div><kbd>Q</kbd></div><div>Cycle quality</div>
+        </div>
+        <p id="touchHint" class="muted small hidden">Touch layout: left stick to move, drag the right side to aim, buttons to fire / jump / reload.</p>
+      </div>
+    </div>
+
+    <!-- -------------------------------------------------------------- PAUSE -->
+    <div id="pause" class="hidden">
+      <div class="panel">
+        <h2>PAUSED</h2>
+        <button id="resumeBtn" class="primary" type="button">RESUME</button>
+
+        <div class="setting">
+          <label>Quality</label>
+          <div class="segmented" id="qualityBtns">
+            <button data-tier="low" type="button">LOW</button>
+            <button data-tier="medium" type="button">MEDIUM</button>
+            <button data-tier="high" type="button">HIGH</button>
+          </div>
+        </div>
+        <div class="setting">
+          <label>Look sensitivity <output id="sensOut">1.00</output></label>
+          <input id="sensInput" type="range" min="0.2" max="3" step="0.05" value="1" />
+        </div>
+        <div class="setting">
+          <label>Volume <output id="volOut">70%</output></label>
+          <input id="volInput" type="range" min="0" max="1" step="0.05" value="0.7" />
+        </div>
+        <div class="setting row">
+          <label>Invert Y axis</label>
+          <input id="invertInput" type="checkbox" />
+        </div>
+        <div class="setting row">
+          <label>Show debug overlay <kbd>F3</kbd></label>
+          <input id="debugInput" type="checkbox" />
+        </div>
+        <p class="muted small" id="pauseStats"></p>
+      </div>
+    </div>
+
+    <!-- -------------------------------------------------------------- ERROR -->
+    <div id="error" class="hidden">
+      <div class="panel">
+        <h2>Could not start</h2>
+        <p id="errorText" class="muted"></p>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

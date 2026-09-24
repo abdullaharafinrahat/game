@@ -1,0 +1,28 @@
+# dependencies / build output
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# the raw asset pack cache — regenerate with `npm run assets`
+.asset-cache/
+
+# editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Playwright artefacts from the verify harnesses
+verify/*.png
+test-results/
+playwright-report/

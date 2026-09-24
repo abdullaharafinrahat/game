@@ -1,0 +1,246 @@
+/**
+ * Weighted animation blending for the Mixamo clip set.
+ *
+ * The pack gives us full-body clips only (no upper/lower body split), so the
+ * approach is:
+ *
+ *   - Locomotion clips (idle/walk/run/sprint, armed or unarmed) all run at the
+ *     same time and are blended by weight, driven by actual movement speed.
+ *     Their phases are synchronised so the feet do not pop between them.
+ *   - One-shot actions (fire, reload, jump, stance change) fade in as overlays
+ *     and suppress the locomotion weights while they play, then release them.
+ *
+ * Weights are ramped here rather than with `AnimationGroup.start(... blending)`
+ * because we need them to react to speed every frame, not just on transitions.
+ */
+import type { AnimationGroup } from '@babylonjs/core/Animations/animationGroup';
+
+import type { AssetLibrary } from '../core/Assets';
+
+interface Layer {
+  group: AnimationGroup;
+  weight: number;
+  target: number;
+  /** Playback rate applied for foot matching. */
+  speedRatio: number;
+  active: boolean;
+}
+
+export interface OneShotOptions {
+  /** Cap the clip (seconds). Defaults to the clip's own length. */
+  maxDuration?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+  /** Playback rate, e.g. 1.3 to make a reload snappier. */
+  speedRatio?: number;
+  /** Keep the final pose after finishing (jump, death). */
+  holdLastFrame?: boolean;
+}
+
+const LOCOMOTION_FADE = 0.16;
+
+export class AnimationController {
+  private layers = new Map<string, Layer>();
+  private override: {
+    name: string;
+    elapsed: number;
+    duration: number;
+    fadeIn: number;
+    fadeOut: number;
+    hold: boolean;
+    weight: number;
+  } | null = null;
+  private warnings: string[] = [];
+
+  constructor(private readonly library: AssetLibrary) {}
+
+  /** True when a clip of this name was loaded and retargeted. */
+  has(name: string): boolean {
+    return this.library.clips.has(name);
+  }
+
+  get currentOverride(): string | null {
+    return this.override?.name ?? null;
+  }
+
+  get isBusy(): boolean {
+    return this.override !== null;
+  }
+
+  /** Blend weights (0..1) and playback rates for the locomotion clips. */
+  setLocomotion(weights: Record<string, number>, speedRatios: Record<string, number> = {}): void {
+    for (const [name, target] of Object.entries(weights)) {
+      const layer = this.ensure(name);
+      if (!layer) continue;
+      layer.target = Math.max(0, Math.min(1, target));
+      const ratio = speedRatios[name];
+      if (ratio !== undefined && Number.isFinite(ratio)) {
+        // Clamp so an accidental 0-speed ratio cannot freeze the feet mid-air.
+        layer.speedRatio = Math.max(0.35, Math.min(2.2, ratio));
+      }
+    }
+  }
+
+  /**
+   * Fades an action in, holds it, fades it out, then hands control back.
+   * Returns the effective duration in seconds (0 if the clip is missing).
+   */
+  play(name: string, options: OneShotOptions = {}): number {
+    const layer = this.ensure(name);
+    if (!layer) return 0;
+
+    const clip = this.library.clipMeta.get(name);
+    const clipLength = clip?.duration ?? 1;
+    const duration = Math.max(0.05, Math.min(options.maxDuration ?? clipLength, clipLength));
+
+    layer.speedRatio = options.speedRatio ?? 1;
+    layer.target = 0;
+    // Restart from the top: these are non-looping actions.
+    layer.group.stop();
+    layer.group.loopAnimation = false;
+    layer.group.speedRatio = layer.speedRatio;
+    layer.group.start(false);
+    layer.active = true;
+
+    this.override = {
+      name,
+      elapsed: 0,
+      duration,
+      fadeIn: options.fadeIn ?? 0.07,
+      fadeOut: options.fadeOut ?? Math.min(0.22, duration * 0.35),
+      hold: options.holdLastFrame ?? false,
+      weight: 0,
+    };
+    return duration;
+  }
+
+  /** Frees the overlay so locomotion can take over again (e.g. on interrupt). */
+  cancelOverride(immediate = false): void {
+    if (!this.override) return;
+    const layer = this.layers.get(this.override.name);
+    if (layer) {
+      if (immediate) {
+        layer.group.stop();
+        layer.active = false;
+        layer.weight = 0;
+      } else {
+        this.override.elapsed = Math.max(this.override.elapsed, this.override.duration - this.override.fadeOut);
+      }
+    } else {
+      this.override = null;
+    }
+  }
+
+  update(dt: number): void {
+    // --- One-shot overlay -------------------------------------------------
+    let overrideWeight = 0;
+    if (this.override) {
+      const o = this.override;
+      o.elapsed += dt;
+      const remaining = o.duration - o.elapsed;
+      if (o.elapsed < o.fadeIn) overrideWeight = o.elapsed / o.fadeIn;
+      else if (remaining <= o.fadeOut) overrideWeight = Math.max(0, remaining / o.fadeOut);
+      else overrideWeight = 1;
+
+      const layer = this.layers.get(o.name);
+      if (layer) layer.weight = overrideWeight;
+
+      if (o.elapsed >= o.duration) {
+        if (layer) {
+          if (o.hold) {
+            layer.group.pause();
+            layer.weight = 0;
+            layer.target = 0;
+          } else {
+            layer.group.stop();
+            layer.active = false;
+            layer.weight = 0;
+          }
+        }
+        this.override = null;
+        overrideWeight = 0;
+      }
+    }
+
+    // --- Locomotion blend -------------------------------------------------
+    const scale = 1 - overrideWeight;
+    for (const [name, layer] of this.layers) {
+      if (this.override && this.override.name === name) continue;
+
+      const wants = layer.target * scale;
+      const step = dt / LOCOMOTION_FADE;
+      layer.weight += Math.max(-step, Math.min(step, wants - layer.weight));
+      if (layer.weight < 0.001 && layer.target === 0 && layer.active) {
+        layer.group.stop();
+        layer.active = false;
+        layer.weight = 0;
+        continue;
+      }
+      if (layer.weight > 0.001 && !layer.active) {
+        layer.group.loopAnimation = true;
+        layer.group.start(true);
+        layer.active = true;
+        this.syncPhases();
+      }
+      if (layer.active) {
+        if (Math.abs(layer.group.speedRatio - layer.speedRatio) > 1e-3) layer.group.speedRatio = layer.speedRatio;
+        layer.group.weight = layer.weight;
+      }
+    }
+  }
+
+  /**
+   * Phase-aligns every running locomotion clip so their cycles stay in step
+   * even though their lengths differ (Walk 1.03 s vs Sprint 0.52 s).
+   */
+  private syncPhases(): void {
+    const running = [...this.layers.values()].filter((l) => l.active);
+    if (running.length < 2) return;
+    const master = running[0].group.animatables[0];
+    if (!master) return;
+    for (const layer of running.slice(1)) {
+      try {
+        layer.group.syncAllAnimationsWith(master);
+      } catch {
+        /* sync is best-effort: a mismatch must never break playback */
+      }
+    }
+  }
+
+  /** Drops every running clip back to the idle pose (respawn, death, reset). */
+  resetTo(weights: Record<string, number>): void {
+    this.override = null;
+    for (const layer of this.layers.values()) {
+      layer.group.stop();
+      layer.weight = 0;
+      layer.target = 0;
+      layer.active = false;
+    }
+    this.setLocomotion(weights);
+    this.update(0);
+  }
+
+  dispose(): void {
+    for (const layer of this.layers.values()) layer.group.dispose();
+    this.layers.clear();
+  }
+
+  get warningsRaised(): string[] {
+    return this.warnings;
+  }
+
+  private ensure(name: string): Layer | null {
+    const existing = this.layers.get(name);
+    if (existing) return existing;
+
+    const group = this.library.clips.get(name);
+    if (!group) {
+      if (!this.warnings.includes(name)) this.warnings.push(name);
+      return null;
+    }
+    group.loopAnimation = true;
+    const layer: Layer = { group, weight: 0, target: 0, speedRatio: 1, active: false };
+    this.layers.set(name, layer);
+    return layer;
+  }
+}
