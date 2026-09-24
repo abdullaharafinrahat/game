@@ -1,3 +1,14 @@
+# GitHub Pages deploy workflow.
+#
+# This is a TEMPLATE rather than a live workflow on purpose: pushing a file to
+# .github/workflows/ requires a token with the `workflow` scope. Copy it there
+# once you have one:
+#
+#   mkdir -p .github/workflows && cp tools/deploy-workflow.yml .github/workflows/deploy.yml
+#
+# It builds the optimized assets from the crass repo on every deploy, validates
+# them, then builds and publishes dist/ to Pages.
+
 name: Build and deploy
 
 on:

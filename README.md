@@ -103,6 +103,11 @@ npm run preview     # serve the build
 npm run assets:check # validate the manifest and the built files
 ```
 
+The production bundle is fully static and uses relative paths, so `dist/` drops onto GitHub
+Pages, Netlify, S3 or a subfolder of any host. A Pages workflow is included as
+`tools/deploy-workflow.yml` — copy it to `.github/workflows/deploy.yml` to enable CI deploys
+(that step needs a token with the `workflow` scope).
+
 ### Controls
 
 | Desktop | |
