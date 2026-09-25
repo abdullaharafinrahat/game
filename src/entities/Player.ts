@@ -17,7 +17,7 @@ import type { AssetLibrary } from '../core/Assets';
 import type { GameAudio } from '../core/Audio';
 import type { ThirdPersonCamera } from '../core/ThirdPersonCamera';
 import type { InputManager } from '../input/InputManager';
-import { CLIP_STRIDE, GAME, MOVE, PLAYER, TURN, type QualitySettings } from '../config';
+import { CLIP_STRIDE, GAME, MOVE, PLAYER, TURN, WEAPON, type QualitySettings } from '../config';
 
 export type Stance = 'unarmed' | 'rifle';
 
@@ -58,6 +58,12 @@ export class Player {
   private facingAngle = 0;
   /** Counts down after a shot, holding his facing on the camera while it fires. */
   private aimFacingHold = 0;
+  /** Stance being switched to while a Draw/Sheathe overlay runs. */
+  private pendingStance: Stance | null = null;
+  /** Countdown until the pending stance (and rifle visibility) is applied. */
+  private stanceTimer = 0;
+  /** Cooldown between unarmed punches. */
+  private punchCooldown = 0;
   /** Vertical correction so the model's feet rest on the capsule base. */
   private readonly modelLift: number;
   private stepDistance = 0;
@@ -138,7 +144,7 @@ export class Player {
       this.velocity.y += GAME.gravity * dt;
       this.integrate(dt);
       this.animation.update(dt);
-      this.weapon.update(dt, input, this.animation);
+      this.weapon.update(dt, input, this.animation, this.stance === 'rifle');
       this.syncVisual();
       if (this.respawnTimer <= 0) this.respawn();
       return;
@@ -185,6 +191,65 @@ export class Player {
       else this.animation.play('KneelToStand', { maxDuration: 0.7, fadeOut: 0.3 });
     }
 
+    // --- Stance switch: sheathe the rifle / draw it from behind ------------
+    // KeyX (or the touch GUN button). Plays SheatheRifle or DrawRifle as an
+    // overlay; the stance and the rifle's visibility flip mid-animation, when
+    // the hand is actually at the back.
+    if (
+      state.stancePressed &&
+      !this.pendingStance &&
+      this.grounded &&
+      !aiming &&
+      !this.weapon.reloading
+    ) {
+      const next: Stance = this.stance === 'rifle' ? 'unarmed' : 'rifle';
+      const clip = next === 'rifle' ? 'DrawRifle' : 'SheatheRifle';
+      if (this.animation.has(clip)) {
+        const clipLength = this.library.clipMeta.get(clip)?.duration ?? 1;
+        const maxDuration = next === 'rifle' ? WEAPON.drawTime : WEAPON.sheatheTime;
+        this.animation.play(clip, {
+          maxDuration,
+          speedRatio: clipLength / maxDuration,
+          fadeIn: 0.08,
+          fadeOut: 0.25,
+        });
+        this.pendingStance = next;
+        this.stanceTimer = maxDuration * (next === 'rifle' ? 0.4 : 0.5);
+      } else {
+        // Clip missing: swap instantly rather than leave the player stuck.
+        this.stance = next;
+        this.weapon.setVisible(this.stance === 'rifle');
+      }
+    }
+    if (this.pendingStance) {
+      this.stanceTimer -= dt;
+      if (this.stanceTimer <= 0) {
+        this.stance = this.pendingStance;
+        this.weapon.setVisible(this.stance === 'rifle');
+        this.pendingStance = null;
+      }
+    }
+
+    // --- Unarmed punch: hold fire to combo ----------------------------------
+    if (
+      this.stance === 'unarmed' &&
+      !this.pendingStance &&
+      state.fireHeld &&
+      this.punchCooldown <= 0 &&
+      this.animation.has('ComboPunch')
+    ) {
+      const clipLength = this.library.clipMeta.get('ComboPunch')?.duration ?? 1;
+      const duration = Math.min(WEAPON.punchDuration, clipLength);
+      this.animation.play('ComboPunch', {
+        maxDuration: duration,
+        speedRatio: clipLength / duration,
+        fadeIn: 0.05,
+        fadeOut: 0.18,
+      });
+      this.punchCooldown = duration + 0.12;
+    }
+    this.punchCooldown = Math.max(0, this.punchCooldown - dt);
+
     // --- Gravity + integration --------------------------------------------
     this.velocity.y += GAME.gravity * dt;
     this.velocity.y = Math.max(this.velocity.y, -55);
@@ -200,7 +265,8 @@ export class Player {
 
     if (this.position.y < -40) this.kill('fall');
 
-    this.weapon.update(dt, input, this.animation);
+    // The rifle only answers the trigger while it is actually in the hands.
+    this.weapon.update(dt, input, this.animation, this.stance === 'rifle' && this.pendingStance === null);
     // `fireHeld` (not the edge-triggered `firePressed`) so the character keeps
     // facing down the camera for the whole full-auto burst.
     this.updateAnimation(aiming, state.moveY, state.fireHeld, dt);
@@ -222,6 +288,7 @@ export class Player {
     this.alive = false;
     this.velocity.setAll(0);
     this.respawnTimer = 3.2;
+    this.pendingStance = null;
     // Drop every locomotion layer before the death pose takes over.
     this.animation.resetTo({});
     const preferred = cause === 'fall' ? 'KnockedOut' : 'Dying';
@@ -240,6 +307,9 @@ export class Player {
     this.health = PLAYER.maxHealth;
     this.alive = true;
     this.weapon.refill();
+    this.stance = 'rifle';
+    this.pendingStance = null;
+    this.weapon.setVisible(true);
     this.animation.resetTo({});
     this.animation.update(0);
     this.events.onRespawn();
@@ -367,7 +437,31 @@ export class Player {
       ratios[name] = ratioSpeed > 0.05 ? s / ratioSpeed : 1;
     };
 
-    if (s <= walkSpeed) {
+    // Lateral movement in facing space: while the facing is pinned (aiming or
+    // just after firing) moving sideways is a real strafe, so the unarmed set
+    // blends in WalkForwardLeft / WalkForwardRight instead of the forward walk.
+    const facingDirX = Math.sin(this.facingAngle);
+    const facingDirZ = Math.cos(this.facingAngle);
+    const lateral = this.velocity.x * facingDirZ - this.velocity.z * facingDirX;
+    const lateralRatio = s > 0.01 ? Math.abs(lateral) / s : 0;
+    // Aiming caps speed at MOVE.aim (1.8), which is inside the walk..run band,
+    // so the strafe check has to come BEFORE the speed branches.
+    const strafing =
+      this.stance === 'unarmed' &&
+      (aiming || this.aimFacingHold > 0) &&
+      s > 0.25 &&
+      s <= Math.max(walkSpeed, MOVE.aim + 0.05) &&
+      lateralRatio > 0.55;
+
+    if (strafing) {
+      const strafeClip = lateral > 0 ? 'WalkForwardRight' : 'WalkForwardLeft';
+      if (this.animation.has(strafeClip)) add(strafeClip, 1, walkSpeed);
+      else {
+        const t = Math.min(1, s / Math.max(0.001, walkSpeed));
+        add(set.idle, 1 - t, 1);
+        add(set.walk, t, walkSpeed);
+      }
+    } else if (s <= walkSpeed) {
       const t = Math.min(1, s / Math.max(0.001, walkSpeed));
       add(set.idle, 1 - t, 1);
       add(set.walk, t, walkSpeed);

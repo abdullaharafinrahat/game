@@ -136,6 +136,14 @@ export const WEAPON = {
   bloomDecay: 42,
   /** Tracer lifetime (seconds). Decal and particle budgets live in QUALITY. */
   tracerLife: 0.09,
+  /** Seconds the DrawRifle overlay takes when switching to rifle stance. */
+  drawTime: 1.4,
+  /** Seconds the SheatheRifle overlay takes when going unarmed. */
+  sheatheTime: 1.8,
+  /** Target duration of the unarmed ComboPunch overlay (clip is 2.97 s). */
+  punchDuration: 1.1,
+  /** Minimum seconds between punches (hold fire to combo). */
+  punchCooldown: 1.25,
   /**
    * Gun mount, hand-bone space. Position is in meters; rotation is Euler
    * degrees (x = pitch, y = yaw, z = roll — the same numbers the Babylon
@@ -185,6 +193,8 @@ export const KEYBINDS = {
   aim: ['KeyF'],
   interact: ['KeyE'],
   quality: ['KeyQ'],
+  /** Draw / sheathe the rifle (rifle <-> unarmed stance). */
+  stance: ['KeyX'],
 } as const;
 
 /** Visual presets per device tier. */

@@ -291,7 +291,7 @@ export class Weapon {
     this.events.onAmmo(this.mag, this.reserve);
   }
 
-  update(dt: number, input: InputManager, animations: AnimationController): void {
+  update(dt: number, input: InputManager, animations: AnimationController, enabled = true): void {
     this.cooldown = Math.max(0, this.cooldown - dt);
     this.kick *= Math.exp(-dt * 12);
     this.flashTimer = Math.max(0, this.flashTimer - dt);
@@ -317,6 +317,12 @@ export class Weapon {
       }
     }
 
+    if (!enabled) {
+      // Sheathed (unarmed stance): timers keep decaying but the trigger,
+      // reload and any pending reload are inert — the rifle is on the back.
+      return;
+    }
+
     const state = input.state;
     if (this.reloading) {
       this.reloadTimer -= dt;
@@ -335,6 +341,16 @@ export class Weapon {
     if (triggerHeld) {
       if (this.mag > 0) this.tryFire(animations);
       else this.beginReload(animations);
+    }
+  }
+
+  /** Hides / shows the rifle mesh (sheathed on the back vs. in the hands). */
+  setVisible(visible: boolean): void {
+    this.model?.setEnabled(visible);
+    if (!visible) {
+      this.flashTimer = 0;
+      this.flash?.setEnabled(false);
+      if (this.flashLight) this.flashLight.intensity = 0;
     }
   }
 

@@ -23,6 +23,8 @@ export interface InputState {
   jumpPressed: boolean;
   firePressed: boolean;
   reloadPressed: boolean;
+  /** Draw/sheathe request (KeyX or the touch GUN button). */
+  stancePressed: boolean;
 }
 
 export interface InputCallbacks {
@@ -46,6 +48,7 @@ export class InputManager {
     jumpPressed: false,
     firePressed: false,
     reloadPressed: false,
+    stancePressed: false,
   };
 
   /** Look deltas in pixels, consumed once per frame by the camera. */
@@ -155,6 +158,11 @@ export class InputManager {
     this.state.reloadPressed = true;
   }
 
+  /** Draw/sheathe request from the touch GUN button. */
+  pressStance(): void {
+    this.state.stancePressed = true;
+  }
+
   toggleAim(on?: boolean): void {
     this.state.aim = on ?? !this.state.aim;
   }
@@ -170,6 +178,7 @@ export class InputManager {
     this.state.jumpPressed = false;
     this.state.firePressed = false;
     this.state.reloadPressed = false;
+    this.state.stancePressed = false;
   }
 
   /** Merges keyboard + touch into the single state object. */
@@ -223,6 +232,8 @@ export class InputManager {
       ev.preventDefault();
     } else if (KEYBINDS.reload.includes(ev.code as never)) {
       this.pressReload();
+    } else if (KEYBINDS.stance.includes(ev.code as never)) {
+      this.pressStance();
     } else if (KEYBINDS.quality.includes(ev.code as never)) {
       this.callbacks.onCycleQuality(ev.shiftKey ? -1 : 1);
     } else if (ev.code === 'Escape' || ev.code === 'KeyP') {

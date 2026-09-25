@@ -33,6 +33,7 @@ export class TouchControls {
       </div>
       <div class="touch-look" data-look></div>
       <div class="touch-buttons">
+        <button class="touch-btn touch-btn-sm" data-act="stance" type="button">GUN</button>
         <button class="touch-btn touch-btn-sm" data-act="crouch" type="button">CROUCH</button>
         <button class="touch-btn touch-btn-sm" data-act="reload" type="button">RELOAD</button>
         <button class="touch-btn touch-btn-sm" data-act="sprint" type="button">SPRINT</button>
@@ -125,6 +126,9 @@ export class TouchControls {
             break;
           case 'reload':
             this.input.pressReload();
+            break;
+          case 'stance':
+            this.input.pressStance();
             break;
           case 'aim':
             this.input.toggleAim();
