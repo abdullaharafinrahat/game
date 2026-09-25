@@ -56,6 +56,7 @@ class Game {
   sensitivity = 1;
   private debugVisible = false;
   private frameSamples: number[] = [];
+  private lastStanceLabel = 'FISTS';
 
   constructor(canvas: HTMLCanvasElement) {
     this.engine = new Engine(canvas, this.antialiasRequested(), {
@@ -529,6 +530,11 @@ class Game {
       this.environment?.updateShadowFocus(this.player.position);
       this.hud.setSpeed(this.player.speed);
       this.hud.setStance(`${this.player.stance.toUpperCase()}${this.player.crouching ? ' · CROUCH' : ''}${aiming ? ' · ADS' : ''}`);
+      const swapLabel = this.player.stance === 'rifle' ? 'FISTS' : 'GUN';
+      if (swapLabel !== this.lastStanceLabel) {
+        this.lastStanceLabel = swapLabel;
+        this.touch.setStanceLabel(swapLabel);
+      }
     } else {
       // Keep the camera live even while paused so the framing stays correct.
       this.camera.update(dt, { position: this.player?.eyePoint ?? new Vector3() }, { x: 0, y: 0 }, false);

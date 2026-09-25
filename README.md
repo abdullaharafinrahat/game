@@ -95,9 +95,19 @@ playback rate — `Sprint` gives 6.6 m/s, which is where `MOVE.sprint` comes fro
 Tuned in `WEAPON` in `src/config.ts`. Current defaults: **full-auto** (`auto: true`, hold the
 trigger — 0.12 s between shots) and **unlimited ammo** (`unlimitedAmmo: true` — the magazine never
 drains and the HUD shows ∞; `R` still plays the manual reload). The rifle mount is a fixed
-hand-bone transform — `mountPosition: [-0.05, -0.02, -0.03]` m and
-`mountRotationDeg: [15.19, -16.35, 170.13]` — pinned to the right hand rather than re-solved per
-frame. Set `unlimitedAmmo`/`auto` to `false` to restore the 5-round bolt-action behaviour.
+hand-bone transform — `mountPosition: [-0.05, -0.02, -0.03]` m,
+`mountRotationDeg: [-2.66, 167.49, 88.59]` (measured in-engine, muzzle forward, scope up) with the
+right hand on the pistol grip (`gripFromMuzzle: 0.72`) and the barrel reaching the left hand. Set
+`unlimitedAmmo`/`auto` to `false` to restore the 5-round bolt-action behaviour.
+
+### Stances: rifle <-> bare hands
+
+`X` (or the GUN/FISTS touch button) swaps stance by playing `SheatheRifle` (putting the rifle back)
+or `DrawRifle` (grabbing it again) — timings in `WEAPON.drawTime` / `WEAPON.sheatheTime`, and the
+rifle hides while bare-handed. Bare-handed: the unarmed locomotion set (`Idle`/`Walk`/`Run`/
+`Sprint`/`Jump`) takes over and the trigger throws `ComboPunch` (`punchDuration`,
+`punchCooldown`; hold fire to combo). While aiming bare-handed, sideways movement blends the
+`WalkForwardLeft`/`WalkForwardRight` strafe cycles into the walk. All 27 pack clips are wired.
 
 ---
 

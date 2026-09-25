@@ -52,6 +52,12 @@ export class TouchControls {
     this.setVisible(false);
   }
 
+  /** The swap button shows the stance the NEXT swap equips (GUN / FISTS). */
+  setStanceLabel(label: string): void {
+    const button = this.root.querySelector<HTMLButtonElement>('[data-act="stance"]');
+    if (button) button.textContent = label;
+  }
+
   setVisible(visible: boolean): void {
     this.root.classList.toggle('visible', visible);
     if (!visible) {
