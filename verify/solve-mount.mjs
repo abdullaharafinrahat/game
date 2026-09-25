@@ -1,7 +1,8 @@
 /**
- * Solves the fixed hand-space rotation that puts the rifle barrel along the
- * character's visual forward with the stock in the hands, and prints it as
- * Euler degrees for WEAPON.mountRotationDeg in config.ts.
+ * Solves the fixed hand-space rotation that points the rifle barrel along the
+ * character's visual forward, SELF-VERIFIED: both barrel orientations are
+ * simulated through the live hand matrix and only the one whose world barrel
+ * direction actually matches `forward` is reported.
  */
 import { chromium } from 'playwright';
 
@@ -9,8 +10,6 @@ const browser = await chromium.launch({
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox', '--disable-dev-shm-usage'],
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-const logs = [];
-page.on('console', (m) => logs.push(m.text()));
 await page.goto('http://localhost:5173', { waitUntil: 'load', timeout: 60000 });
 await page.waitForFunction(() => window.__game && !document.getElementById('start').classList.contains('hidden'), null, { timeout: 300000 });
 await page.evaluate(() => window.__game.start());
@@ -22,10 +21,7 @@ const frames = async (n = 3) => {
 };
 await frames(5);
 
-console.log('--- attach log ---');
-logs.filter((l) => l.includes('[weapon]')).forEach((l) => console.log(l));
-
-const solved = await page.evaluate(() => {
+const result = await page.evaluate(() => {
   const g = window.__game;
   const V3 = g.player.position.constructor;
   const pivot = g.scene.getTransformNodeByName('weaponPivot');
@@ -35,16 +31,15 @@ const solved = await page.evaluate(() => {
   const hand = g.library.character.skeleton.bones.find((b) => /RightHand$/i.test(b.name)).getTransformNode();
   const mesh = g.player.weapon.modelMesh;
 
-  // Geometry axes in mesh-local space (same logic as Weapon.attach).
+  // Geometry axes (mirrors Weapon.attach).
   mesh.refreshBoundingInfo(false);
   const b = mesh.getBoundingInfo().boundingBox;
   const size = b.maximum.subtract(b.minimum);
   const axes = ['x', 'y', 'z'];
   const barrelAxis = axes.reduce((a, c) => (size[c] > size[a] ? c : a), 'x');
   const upAxis = axes.filter((a) => a !== barrelAxis).sort((a, c) => size[c] - size[a])[0];
-  // Muzzle direction along the barrel axis, read from the muzzle node (pivot space).
-  const muzzle = g.player.weapon.muzzleNode;
-  const muzzleSign = Math.sign(muzzle.position[barrelAxis]) || 1;
+  // Muzzle is the +end of the barrel axis (thin tube end, per geometry scan).
+  const muzzleSign = Math.sign(g.scene.getTransformNodeByName('muzzle').position[barrelAxis]) || 1;
 
   const axisVector = (axis, sign) => new V3(axis === 'x' ? sign : 0, axis === 'y' ? sign : 0, axis === 'z' ? sign : 0);
   const localBarrel = axisVector(barrelAxis, muzzleSign);
@@ -53,43 +48,55 @@ const solved = await page.evaluate(() => {
 
   hand.computeWorldMatrix(true);
   const handScale = new V3();
-  const handRot = new Q();
-  hand.getWorldMatrix().decompose(handScale, handRot);
+  const handWorldRot = new Q(); // FULL world rotation (armature + arm + hand)
+  hand.getWorldMatrix().decompose(handScale, handWorldRot);
 
   const fw = g.player.root.forward.clone();
   fw.y = 0;
   fw.normalize();
 
-  const localBasis = new Matrix();
-  Matrix.FromXYZAxesToRef(localBarrel, localUp, localThird, localBasis);
   const desiredBasis = new Matrix();
   Matrix.FromXYZAxesToRef(fw, V3.Up(), V3.Cross(fw, V3.Up()).normalize(), desiredBasis);
 
-  // Same composition the old per-frame solve used (verified in-engine then):
-  //   qLocal = inv(localBasis) * inv(handRotation) * desiredWorld
-  const qLocal = Q.FromRotationMatrix(Matrix.Invert(localBasis))
-    .multiply(Q.Inverse(handRot))
-    .multiply(Q.FromRotationMatrix(desiredBasis));
+  // Candidate local rotations: barrel/up mapped to (forward, up) in the two
+  // possible handedness layouts, plus the 180-deg Y flip of each (in case the
+  // grip-rear/grip-front convention is inverted).
+  const localBasis = new Matrix();
+  Matrix.FromXYZAxesToRef(localBarrel, localUp, localThird, localBasis);
+  const flipped = new Matrix();
+  Matrix.FromXYZAxesToRef(localBarrel.scale(-1), localUp, V3.Cross(localBarrel.scale(-1), localUp).normalize(), flipped);
 
-  const e = qLocal.toEulerAngles();
-  const deg = [e.x, e.y, e.z].map((r) => +(r * 180) / Math.PI);
-  const norm = deg.map((d) => +d.toFixed(2));
-
-  // Simulate: what world direction would the barrel point with this fixed quat?
-  // pivotWorld = handWorld * T(pos) * R(qLocal) * S(1/handUnit); barrel = R(qLocal)*localBarrel in hand space -> world
-  const barrelWorld = V3.TransformNormal(localBarrel, hand.getWorldMatrix().multiply(new Matrix()));
-  // (proper check happens after applying it for real — this is informational)
-  return {
-    barrelAxis,
-    upAxis,
-    muzzleSign,
-    solvedEulerDeg: norm,
-    solvedQuat: qLocal.asArray().map((v) => +v.toFixed(4)),
-    currentEulerDeg: (() => {
-      const ce = pivot.rotationQuaternion.toEulerAngles();
-      return [ce.x, ce.y, ce.z].map((r) => +((r * 180) / Math.PI).toFixed(2));
-    })(),
+  const candidates = {
+    'muzzle-forward': Q.FromRotationMatrix(Matrix.Invert(localBasis)).multiply(Q.Inverse(handWorldRot)).multiply(Q.FromRotationMatrix(desiredBasis)),
+    'flipY': Q.RotationYawPitchRoll(Math.PI, 0, 0).multiply(Q.FromRotationMatrix(Matrix.Invert(localBasis))).multiply(Q.Inverse(handWorldRot)).multiply(Q.FromRotationMatrix(desiredBasis)),
   };
+
+  // Simulate each candidate through the live hand world rotation and measure
+  // where the barrel would point in world space.
+  const simulate = (qLocal) => {
+    const worldRot = handWorldRot.multiply(qLocal);
+    const dir = V3.Zero();
+    // rotate localBarrel by worldRot: use rotation matrix apply
+    const m = new Matrix();
+    Matrix.FromQuaternionToRef(worldRot, m);
+    V3.TransformNormalToRef(localBarrel, m, dir);
+    const flat = new V3(dir.x, 0, dir.z).normalize();
+    return { dot: +V3.Dot(flat, fw).toFixed(3), pitchDeg: +((Math.asin(Math.max(-1, Math.min(1, dir.y))) * 180) / Math.PI).toFixed(1) };
+  };
+
+  const report = {};
+  let best = null;
+  for (const [name, q] of Object.entries(candidates)) {
+    const sim = simulate(q);
+    report[name] = { ...sim, eulerDeg: (() => { const e = q.toEulerAngles(); return [e.x, e.y, e.z].map((r) => +((r * 180) / Math.PI).toFixed(2)); })() };
+    if (!best || sim.dot > best.sim.dot) best = { name, q, sim };
+  }
+  // Also report the CURRENT config for reference
+  const eCur = pivot.rotationQuaternion.toEulerAngles();
+  report.current = { eulerDeg: [eCur.x, eCur.y, eCur.z].map((r) => +((r * 180) / Math.PI).toFixed(2)), sim: simulate(pivot.rotationQuaternion) };
+
+  return { barrelAxis, upAxis, muzzleSign, report, best: { name: best.name, eulerDeg: report[best.name].eulerDeg, sim: best.sim } };
 });
-console.log('SOLVED:', JSON.stringify(solved, null, 1));
+console.log(JSON.stringify(result, null, 1));
+console.log('\nBEST:', result.best.name, result.best.eulerDeg, 'sim dot:', result.best.sim.dot, 'pitch:', result.best.sim.pitchDeg);
 await browser.close();

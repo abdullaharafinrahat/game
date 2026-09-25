@@ -77,10 +77,12 @@ const axisIndex = (axis: 'x' | 'y' | 'z'): 0 | 1 | 2 => AXIS_INDEX[axis];
 const axisComponent = (v: Vector3, axis: 'x' | 'y' | 'z'): number => v[axis];
 
 /**
- * Measures which end of the barrel axis is the muzzle by comparing how thick the
- * geometry is at each end: thin tube = muzzle, thick wedge = stock/receiver.
- * Falls back to "the end farthest from the pivot" if the mesh has no readable
- * positions.
+ * Measures which end of the barrel axis is the muzzle by comparing how *tall*
+ * the geometry is at each end: a muzzle is a slim tube, a stock is a tall
+ * wedge. The metric is the bounding extent along the up axis inside each end
+ * band — average vertex thickness is unreliable here (the stock's sparse
+ * vertices averaged *lower* than the muzzle's on this exact model, which
+ * mounted the rifle backwards).
  */
 function detectMuzzleSign(mesh: Mesh, barrelAxis: 'x' | 'y' | 'z', upAxis: 'x' | 'y' | 'z'): 1 | -1 {
   const positions = mesh.getVerticesData(VertexBuffer.PositionKind);
@@ -98,26 +100,30 @@ function detectMuzzleSign(mesh: Mesh, barrelAxis: 'x' | 'y' | 'z', upAxis: 'x' |
   const span = Math.max(high - low, 0.0001);
   const band = span * 0.12;
 
-  let thinLow = 0;
-  let thinHigh = 0;
+  let lowMin = Number.POSITIVE_INFINITY;
+  let lowMax = Number.NEGATIVE_INFINITY;
+  let highMin = Number.POSITIVE_INFINITY;
+  let highMax = Number.NEGATIVE_INFINITY;
   let countLow = 0;
   let countHigh = 0;
   for (let i = 0; i + 2 < positions.length; i += 3) {
     const t = positions[i + along];
-    const thickness = Math.abs(positions[i + across]);
+    const c = positions[i + across];
     if (t <= low + band) {
-      thinLow += thickness;
+      lowMin = Math.min(lowMin, c);
+      lowMax = Math.max(lowMax, c);
       countLow++;
     } else if (t >= high - band) {
-      thinHigh += thickness;
+      highMin = Math.min(highMin, c);
+      highMax = Math.max(highMax, c);
       countHigh++;
     }
   }
   if (!countLow || !countHigh) return 1;
-  const averageLow = thinLow / countLow;
-  const averageHigh = thinHigh / countHigh;
-  // Smaller average profile thickness = the muzzle.
-  return averageLow < averageHigh ? -1 : 1;
+  const extentLow = lowMax - lowMin; // e.g. butt stock: tall
+  const extentHigh = highMax - highMin; // e.g. muzzle tube: slim
+  // The slimmer end is the muzzle.
+  return extentLow < extentHigh ? -1 : 1;
 }
 
 export class Weapon {

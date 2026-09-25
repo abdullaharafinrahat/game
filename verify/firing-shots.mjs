@@ -1,0 +1,23 @@
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ args: ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox','--disable-dev-shm-usage'] });
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+await page.goto('http://localhost:5173', { waitUntil: 'load', timeout: 60000 });
+await page.waitForFunction(() => window.__game && !document.getElementById('start').classList.contains('hidden'), null, { timeout: 300000 });
+await page.evaluate(() => window.__game.start());
+await page.waitForTimeout(1500);
+const frames = async (n=1) => { const s = await page.evaluate(() => window.__game.scene.getFrameId()); await page.waitForFunction((s)=>window.__game.scene.getFrameId()>=s, s+n, {timeout:60000}); };
+await frames(5);
+await page.evaluate(() => window.__game.camera.setZoom(-4.9));
+await page.evaluate(() => { window.__game.camera.yaw = Math.PI * 0.8; window.__game.camera.pitch = -0.04; });
+await frames(6);
+// fire and catch mid-burst (not the first frame)
+await page.evaluate(() => window.__game.input.setTouchFire(true));
+await frames(4);
+await page.screenshot({ path: '/home/user/final-firing-1.png' });
+await frames(6);
+await page.screenshot({ path: '/home/user/final-firing-2.png' });
+await page.evaluate(() => window.__game.input.setTouchFire(false));
+await frames(20);
+await page.screenshot({ path: '/home/user/final-idle.png' });
+console.log('saved final-firing-1/2.png, final-idle.png');
+await browser.close();

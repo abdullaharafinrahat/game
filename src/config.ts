@@ -142,14 +142,15 @@ export const WEAPON = {
    * inspector shows for `rotation`). The mount is FIXED: it does not follow the
    * hand pose, it is pinned to these exact values on the right-hand bone.
    *
-   * Rotation note: these were SOLVED in-engine (verify/solve-mount.mjs) so the
-   * barrel lies along the character's visual forward with the stock in the
-   * fists. The rifle's local barrel axis is -X inside a node that ships a
-   * 180-degree Z flip, so intuitive-looking values such as
-   * [15.19, -16.35, 170.13] hang the gun barrel-down beside the leg instead.
+   * Rotation note: these values were measured in the live scene
+   * (verify/solve-mount.mjs sweeps 180-degree flips about Y/Z and measures the
+   * real muzzle-vs-grip direction) so the muzzle points along the character's
+   * forward with the scope up and the stock in the shoulder. The rifle's local
+   * barrel is +X (thin tube end) with the stock at -X; the earlier
+   * [15.19, -16.35, 170.13] had it reversed AND upside down.
    */
   mountPosition: [-0.05, -0.02, -0.03],
-  mountRotationDeg: [2.71, 167.55, -88.67],
+  mountRotationDeg: [-2.66, 167.49, 88.59],
 } as const;
 
 
