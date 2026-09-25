@@ -67,8 +67,13 @@ const GRIP = {
   length: 1.15,
   /** Fixed offset from the hand bone, in meters. */
   position: Vector3.FromArray(WEAPON.mountPosition),
-  /** How far behind the muzzle the hand grips (fraction of total length). */
-  gripFromMuzzle: 0.3,
+  /**
+   * Where the RIGHT hand grips, as a fraction of the length measured back from
+   * the muzzle. ~0.72 = the pistol grip / trigger area: the right hand holds
+   * the grip and the barrel extends forward into the left hand. (0.3 put the
+   * right hand directly on the barrel.)
+   */
+  gripFromMuzzle: 0.72,
 };
 
 
