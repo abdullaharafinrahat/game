@@ -77,11 +77,27 @@ phase-synced, so the feet do not pop between cycles of different length (Walk 1.
 0.52 s). One-shots (`FireRifle`, `Reload`, `ProneToKneel`, `Dying`, …) fade in as overlays and
 suppress locomotion while they run.
 
+> **Weight gotcha (fixed).** `AnimationGroup`'s third constructor argument is its *weight*, and
+> Babylon treats weight-0 animatables as actively paused — they write nothing. Creating the
+> retargeted groups with `new AnimationGroup(name, scene, 0)` therefore left every one-shot clip
+> invisible (locomotion survived only because the controller re-assigns `group.weight` every
+> frame). Groups are now created at the default weight and `AnimationController` drives
+> `group.weight` every frame for overrides too.
+
 **Root motion is stripped and measured.** Mixamo bakes travel into the Hips translation track
 (`Sprint` walks 3.45 m per 0.52 s cycle). Gameplay code owns the transform, so the two horizontal
 axes are pinned to the clip's first key while the vertical axis is left alone so bobbing and jump
 arcs survive. The pipeline reports each clip's drift, and the measured value is used to compute
 playback rate — `Sprint` gives 6.6 m/s, which is where `MOVE.sprint` comes from.
+
+### Weapon behaviour
+
+Tuned in `WEAPON` in `src/config.ts`. Current defaults: **full-auto** (`auto: true`, hold the
+trigger — 0.12 s between shots) and **unlimited ammo** (`unlimitedAmmo: true` — the magazine never
+drains and the HUD shows ∞; `R` still plays the manual reload). The rifle mount is a fixed
+hand-bone transform — `mountPosition: [-0.05, -0.02, -0.03]` m and
+`mountRotationDeg: [15.19, -16.35, 170.13]` — pinned to the right hand rather than re-solved per
+frame. Set `unlimitedAmmo`/`auto` to `false` to restore the 5-round bolt-action behaviour.
 
 ---
 

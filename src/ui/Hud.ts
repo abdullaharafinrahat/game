@@ -126,8 +126,9 @@ export class Hud {
 
   // --- Gameplay -----------------------------------------------------------
   setAmmo(mag: number, reserve: number): void {
-    this.ammoMag.textContent = String(mag);
-    this.ammoReserve.textContent = `/ ${reserve}`;
+    // Non-finite values (unlimited ammo) render as ∞.
+    this.ammoMag.textContent = Number.isFinite(mag) ? String(mag) : '∞';
+    this.ammoReserve.textContent = Number.isFinite(reserve) ? `/ ${reserve}` : '/ ∞';
     this.ammoMag.style.color = mag === 0 ? 'var(--danger)' : 'var(--text)';
   }
 

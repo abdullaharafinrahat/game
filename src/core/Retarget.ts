@@ -102,7 +102,15 @@ export function retargetClip(
   const report: RetargetReport = { name: options.name, channels: 0, dropped: [], rootMotionStripped: false };
   if (!source) return { group: null, report };
 
-  const group = new AnimationGroup(options.name, scene, 0);
+  // NOTE: the third constructor argument of AnimationGroup is its WEIGHT
+  // (default -1 = unweighted). Passing 0 here created every group with weight
+  // 0, and Babylon treats weight-0 animatables as actively paused — they write
+  // nothing. Locomotion clips survived because AnimationController re-assigns
+  // `group.weight` every frame, but the one-shot overrides (FireRifle, Reload)
+  // never had their group weight set, so they played at weight 0 and were
+  // invisible. Leave the default in place; AnimationController owns weights.
+  const group = new AnimationGroup(options.name, scene);
+
   group.loopAnimation = options.loop;
   const upAxis = AXIS_INDEX[options.upAxis];
 

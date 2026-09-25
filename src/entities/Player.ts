@@ -100,9 +100,6 @@ export class Player {
     this.animation = new AnimationController(library);
     this.weapon = new Weapon(scene, camera, audio, events.weapon, quality);
     this.weapon.attach(library, library.character);
-    // `this.root` is the node whose rotation.y *is* the facing direction, so it
-    // is the correct reference frame for the rifle's alignment.
-    this.weapon.setFacingNode(this.root);
     this.respawnPoint.copyFrom(spawn);
     this.syncVisual();
   }
@@ -204,7 +201,9 @@ export class Player {
     if (this.position.y < -40) this.kill('fall');
 
     this.weapon.update(dt, input, this.animation);
-    this.updateAnimation(aiming, state.moveY, state.firePressed, dt);
+    // `fireHeld` (not the edge-triggered `firePressed`) so the character keeps
+    // facing down the camera for the whole full-auto burst.
+    this.updateAnimation(aiming, state.moveY, state.fireHeld, dt);
     this.animation.update(dt);
     this.updateFootsteps(dt, wantsSprint);
     this.syncVisual();

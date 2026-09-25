@@ -33,17 +33,21 @@ const check = (name, pass, detail) => {
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name.padEnd(26)} ${detail}`);
 };
 
-// 1. Fire consumes ammo and plays the fire clip
+// 1. Full-auto + unlimited ammo: holding fire fires many rounds, mag untouched
 const magBefore = await page.evaluate(() => window.__game.player.weapon.mag);
 await act(() => window.__game.input.setTouchFire(true));
+await frames(20); // ~0.33 s of game time at 60 fps -> several 0.12 s intervals
 const afterShot = await page.evaluate(() => ({
   mag: window.__game.player.weapon.mag,
+  shots: window.__game.player.weapon.shotsFired,
   clip: window.__game.player.animation.currentOverride,
   sparks: window.__game.scene.particleSystems.length,
 }));
-check('fire consumes a round', afterShot.mag === magBefore - 1, `${magBefore} -> ${afterShot.mag}`);
+check('full-auto fires while held', afterShot.shots >= 2, `${afterShot.shots} shot(s)`);
+check('ammo is unlimited', afterShot.mag === magBefore, `mag ${magBefore} -> ${afterShot.mag}`);
 check('fire plays a clip', afterShot.clip === 'FireRifle', String(afterShot.clip));
 await act(() => window.__game.input.setTouchFire(false));
+
 
 // 2. Bloom reacts, tracers/decals spawn
 await page.waitForTimeout(400);
@@ -65,7 +69,7 @@ const reloading = await page.evaluate(() => ({
 check('reload starts', reloading.reloading === true, `clip ${reloading.clip}`);
 await frames(90); // 2.6 s of game time at 50 ms/frame
 const afterReload = await page.evaluate(() => window.__game.player.weapon.mag);
-check('reload refills mag', afterReload === 5, `mag ${afterReload}`);
+check('reload finishes with a full mag', afterReload === 5, `mag ${afterReload}`);
 
 // 4. Crouch changes pose + speed cap
 await act(() => window.__game.input.setTouchCrouch(true));

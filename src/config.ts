@@ -118,8 +118,12 @@ export const WEAPON = {
   name: 'Sniper',
   magSize: 5,
   reserveAmmo: 25,
-  /** Seconds between shots. */
-  fireInterval: 0.62,
+  /** true = bottomless magazine: rounds are never consumed, reserve shows ∞. */
+  unlimitedAmmo: true,
+  /** true = hold the trigger for full-auto; false = one shot per click. */
+  auto: true,
+  /** Seconds between shots (0.12 ≈ 8.3 rounds/s of full-auto). */
+  fireInterval: 0.12,
   reloadTime: 2.6,
   damage: 60,
   /** Hitscan range (meters). */
@@ -132,7 +136,16 @@ export const WEAPON = {
   bloomDecay: 42,
   /** Tracer lifetime (seconds). Decal and particle budgets live in QUALITY. */
   tracerLife: 0.09,
+  /**
+   * Gun mount, hand-bone space. Position is in meters; rotation is Euler
+   * degrees (x = pitch, y = yaw, z = roll — the same numbers the Babylon
+   * inspector shows for `rotation`). The mount is FIXED: it does not follow the
+   * hand pose, it is pinned to these exact values on the right-hand bone.
+   */
+  mountPosition: [-0.05, -0.02, -0.03],
+  mountRotationDeg: [15.19, -16.35, 170.13],
 } as const;
+
 
 /**
  * Stride length in meters per second of animation playback at speedRatio 1.

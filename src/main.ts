@@ -165,7 +165,8 @@ class Game {
         onFootstep: () => undefined,
         onLanding: () => undefined,
         weapon: {
-          onAmmo: (mag, reserve) => this.hud.setAmmo(mag, reserve),
+          onAmmo: (mag, reserve) =>
+            this.hud.setAmmo(WEAPON.unlimitedAmmo ? Number.POSITIVE_INFINITY : mag, reserve),
           onHit: (damage) => this.hud.hitMarker(damage > 0),
           onBloom: (amount) => this.hud.addBloom(amount),
           onReload: (duration) => {
@@ -192,7 +193,7 @@ class Game {
     this.player.setFacing(this.camera.yaw);
     this.camera.sensitivityScale = this.sensitivity;
     this.hud.setHealth(PLAYER.maxHealth, PLAYER.maxHealth);
-    this.hud.setAmmo(WEAPON.magSize, WEAPON.reserveAmmo);
+    this.hud.setAmmo(WEAPON.unlimitedAmmo ? Number.POSITIVE_INFINITY : WEAPON.magSize, WEAPON.unlimitedAmmo ? Number.POSITIVE_INFINITY : WEAPON.reserveAmmo);
 
     // --- Ready ------------------------------------------------------------
     const triangles = library.manifest.character.tris + library.manifest.props.reduce((a, p) => a + p.tris, 0);

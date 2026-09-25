@@ -109,8 +109,11 @@ export class AnimationController {
     // Restart from the top: these are non-looping actions.
     layer.group.stop();
     layer.group.loopAnimation = false;
-    layer.group.speedRatio = layer.speedRatio;
-    layer.group.start(false);
+    // `start()` re-stamps every animatable with the group's weight and resets
+    // speedRatio to its second argument, so both must be (re)applied around the
+    // start call — setting `group.speedRatio` before start() is discarded.
+    layer.group.weight = 0; // fades in via update()
+    layer.group.start(false, layer.speedRatio);
     layer.active = true;
 
     this.override = {
@@ -154,7 +157,17 @@ export class AnimationController {
       else overrideWeight = 1;
 
       const layer = this.layers.get(o.name);
-      if (layer) layer.weight = overrideWeight;
+      if (layer) {
+        layer.weight = overrideWeight;
+        // The override's weight must reach the AnimationGroup itself. Groups are
+        // retargeted with weight -1 by default and `start()` stamps that onto
+        // every animatable; a weight-0 animatable is "actively paused" in
+        // Babylon and writes nothing at all — which is exactly why FireRifle and
+        // Reload used to be invisible. Feeding `group.weight` every frame also
+        // makes fadeIn/fadeOut real cross-fades against the locomotion layers.
+        layer.group.weight = overrideWeight;
+        if (Math.abs(layer.group.speedRatio - layer.speedRatio) > 1e-3) layer.group.speedRatio = layer.speedRatio;
+      }
 
       if (o.elapsed >= o.duration) {
         if (layer) {

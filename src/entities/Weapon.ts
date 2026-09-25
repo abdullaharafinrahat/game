@@ -10,7 +10,7 @@
  * authored GLB still lands in the hand at a plausible size instead of needing
  * hand-tuned numbers.
  */
-import { Matrix, Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector';
+import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color';
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode';
@@ -53,26 +53,24 @@ interface Tracer {
 }
 
 /**
- * Mount tuning. The orientation is *solved*, never hardcoded: this rig's hand
- * bone inherits a rotated, 0.01-scaled armature, so a fixed Euler offset that
- * suits one rig comes out sideways on the next. The pivot's local rotation is
- * recomputed every frame from the live hand matrix (see `alignToCharacter`), so
- * the rifle stays pointing along the character's visual forward while the arm
- * animation moves underneath it.
+ * Mount tuning. Position and rotation are FIXED, hand-bone-space values from
+ * `WEAPON.mountPosition` / `WEAPON.mountRotationDeg` in `config.ts` — the rifle
+ * is pinned rigidly to the right hand and does not follow the arm pose.
+ *
+ * (An earlier version re-solved the orientation every frame so the barrel
+ * always pointed along the character's facing; that behaviour is what produced
+ * hand-space values like 15.19 / -16.35 / 170.13, which are now pinned verbatim
+ * in the config so the mount is deterministic.)
  */
 const GRIP = {
   /** Rifle length in meters after normalisation (a sniper is ~1.2 m). */
   length: 1.15,
-  /** Nudge in hand space, in meters, after the orientation is solved. */
-  position: new Vector3(0.03, 0.04, 0.0),
+  /** Fixed offset from the hand bone, in meters. */
+  position: Vector3.FromArray(WEAPON.mountPosition),
   /** How far behind the muzzle the hand grips (fraction of total length). */
   gripFromMuzzle: 0.3,
-  /**
-   * Extra rotation in hand space, applied after the alignment solve:
-   * yaw brings the stock in toward the shoulder, roll squares the scope up.
-   */
-  mountTweak: new Vector3(0, 0.0, 0),
 };
+
 
 const AXIS_INDEX = { x: 0, y: 1, z: 2 } as const;
 const axisIndex = (axis: 'x' | 'y' | 'z'): 0 | 1 | 2 => AXIS_INDEX[axis];
@@ -126,18 +124,6 @@ export class Weapon {
   private model: Mesh | null = null;
   private pivot: TransformNode | null = null;
   private muzzle: TransformNode | null = null;
-  /** Hand bone the rifle rides on. */
-  private handNode: TransformNode | null = null;
-  /**
-   * The node that represents which way the character is *facing* — i.e. the one
-   * gameplay sets `rotation.y` on. It must NOT be the GLB's root node: that one
-   * carries its own export rotation (the Blender fix-up), so `glbRoot.forward`
-   * points somewhere other than where the model actually looks. Earlier this
-   * used the GLB root and the rifle ended up 180 degrees out at idle.
-   */
-  private facingNode: TransformNode | null = null;
-  /** Rifle geometry axes, captured at attach time for the per-frame solve. */
-  private mount: { barrelAxis: 'x' | 'y' | 'z'; upAxis: 'x' | 'y' | 'z'; muzzleSign: 1 | -1 } | null = null;
   private flash: Mesh | null = null;
   private flashLight: PointLight | null = null;
   private sparks: ParticleSystem | null = null;
@@ -149,7 +135,10 @@ export class Weapon {
   private kick = 0;
   private flashTimer = 0;
   mag: number = WEAPON.magSize;
-  reserve: number = WEAPON.reserveAmmo;
+  /** Infinity when unlimited ammo is on (HUD renders it as ∞). */
+  reserve: number = WEAPON.unlimitedAmmo ? Number.POSITIVE_INFINITY : WEAPON.reserveAmmo;
+  /** Total rounds fired since attach — full-auto verification, debug, tooling. */
+  shotsFired = 0;
   reloading = false;
   private reloadTimer = 0;
 
@@ -166,82 +155,6 @@ export class Weapon {
   private get limits(): { decals: number; particles: number } {
     const settings = this.quality();
     return { decals: settings.decals, particles: settings.particles };
-  }
-
-  /**
-   * Points the rifle along the character's visual forward axis and keeps it
-   * level, for the CURRENT hand pose.
-   *
-   * This runs every frame rather than once at attach time. Solving it once
-   * (from the rest pose) leaves a fixed offset that the arm animation then
-   * carries away — measured at 10-40 degrees of drift, which is what "the gun
-   * has been reversed" looked like. Re-solving per frame makes the rifle behave
-   * like an attachment constraint: it stays forward and level in every clip.
-   */
-  /** Keeps the mount aligned after each frame's skeleton update. */
-  private readonly alignObserver = (): void => {
-    this.alignToCharacter();
-  };
-
-  /** Tells the weapon which node defines the character's facing direction. */
-  setFacingNode(node: TransformNode): void {
-    this.facingNode = node;
-    this.alignToCharacter();
-  }
-
-  private alignToCharacter(): void {
-    const { pivot, handNode, facingNode, mount } = this;
-    if (!pivot || !handNode || !facingNode || !mount) return;
-
-    handNode.computeWorldMatrix(true);
-    facingNode.computeWorldMatrix(true);
-
-    const handScale = new Vector3();
-    const handRotation = new Quaternion();
-    handNode.getWorldMatrix().decompose(handScale, handRotation);
-
-    const axisVector = (axis: 'x' | 'y' | 'z', sign: number) =>
-      new Vector3(axis === 'x' ? sign : 0, axis === 'y' ? sign : 0, axis === 'z' ? sign : 0);
-    const localBarrel = axisVector(mount.barrelAxis, mount.muzzleSign);
-    const localUp = axisVector(mount.upAxis, 1);
-    const localThird = Vector3.Cross(localBarrel, localUp).normalize();
-
-    // Desired world orientation: barrel along the character's visual forward
-    // (its own +Z, flattened so the rifle stays level on slopes), up to the sky.
-    const forwardWorld = facingNode.forward.clone();
-    forwardWorld.y = 0;
-    forwardWorld.normalize();
-    if (forwardWorld.lengthSquared() < 0.5) forwardWorld.set(0, 0, 1);
-
-    // Composition order is NOT derivable from the docs (Babylon uses row-vector
-    // matrices, `Matrix.multiply` mutates in place, and `Quaternion.multiply`
-    // composes as "this, then argument"), so all twelve plausible orderings were
-    // measured in-engine and this one alone came out with the barrel exactly
-    // along forward and pitch 0.0:
-    //     pivot = localBasis⁻¹ · handRotation⁻¹ · desiredWorld
-    // `Matrix.Invert` (not `.invert()`) — the latter mutates its operand.
-    const localBasis = Matrix.Identity();
-    Matrix.FromXYZAxesToRef(localBarrel, localUp, localThird, localBasis);
-    const desiredBasis = Matrix.Identity();
-    Matrix.FromXYZAxesToRef(forwardWorld, Vector3.Up(), Vector3.Cross(forwardWorld, Vector3.Up()).normalize(), desiredBasis);
-
-    // Composed with quaternions exactly as measured: Babylon's Quaternion and
-    // Matrix products do NOT agree on operand order, and the matrix form of this
-    // same expression pointed the rifle straight up.
-    const localQuat = Quaternion.FromRotationMatrix(Matrix.Invert(localBasis))
-      .multiply(Quaternion.Inverse(handRotation))
-      .multiply(Quaternion.FromRotationMatrix(desiredBasis));
-    if (GRIP.mountTweak.lengthSquared() > 0) {
-      const tweak = Quaternion.RotationYawPitchRoll(GRIP.mountTweak.y, GRIP.mountTweak.x, GRIP.mountTweak.z);
-      localQuat.multiplyInPlace(Quaternion.Inverse(tweak));
-    }
-
-    // Assign through the SETTER every frame. Writing into the existing
-    // quaternion with copyFrom() mutates it without notifying the TransformNode,
-    // so the cached world matrix is never recomposed and the rifle silently
-    // keeps its rest-pose orientation while the arm animates under it — which is
-    // exactly what "the gun has been reversed" looked like.
-    pivot.rotationQuaternion = localQuat;
   }
 
   /** The rifle mesh, once mounted (also used by the dev measurement tools). */
@@ -301,23 +214,22 @@ export class Weapon {
     // undo it on the pivot and every offset below can be written in meters.
     handNode.computeWorldMatrix(true);
     const handScale = new Vector3();
-    const handRotation = new Quaternion();
-    handNode.getWorldMatrix().decompose(handScale, handRotation);
+    handNode.getWorldMatrix().decompose(handScale, new Quaternion());
     const handUnit = Math.abs(handScale.x) > 1e-6 ? handScale.x : 1;
     this.pivot.scaling.setAll(1 / handUnit);
 
-    this.handNode = handNode;
-    this.facingNode = this.facingNode ?? character.root;
-    this.mount = { barrelAxis, upAxis, muzzleSign };
-    // Orient the rifle for the current pose, then keep re-solving it *after the
-    // skeleton animates* each frame. Solving during the gameplay update reads a
-    // hand matrix from the previous frame's pose, which leaves the rifle lagging
-    // the arm by up to ~20 degrees while walking (idle looked perfect because a
-    // static pose hides the lag entirely).
-    this.alignToCharacter();
-    this.scene.onAfterAnimationsObservable.add(this.alignObserver);
-
+    // --- Fixed mount (values from WEAPON in config.ts) ----------------------
+    // The pivot is pinned to the requested hand-space offset and Euler rotation.
+    // `Quaternion.FromEulerAngles(x, y, z)` produces exactly the matrix that
+    // `rotation = (x, y, z)` would, so the config numbers match what the
+    // Babylon inspector displays.
     this.pivot.position.copyFrom(GRIP.position);
+    const [pitchDeg, yawDeg, rollDeg] = WEAPON.mountRotationDeg;
+    this.pivot.rotationQuaternion = Quaternion.FromEulerAngles(
+      (pitchDeg * Math.PI) / 180,
+      (yawDeg * Math.PI) / 180,
+      (rollDeg * Math.PI) / 180,
+    );
 
     source.parent = this.pivot;
     // The exported node transform is not identity (this GLB packs a 180-degree Z
@@ -405,8 +317,11 @@ export class Weapon {
       this.beginReload(animations);
       return;
     }
-    // Bolt-action: one shot per click. Auto-reload when the mag runs dry.
-    if (state.firePressed) {
+    // Full-auto when WEAPON.auto: holding the trigger keeps firing at
+    // WEAPON.fireInterval; otherwise one shot per click. Auto-reload when the
+    // mag runs dry (never happens with unlimited ammo — the mag stays full).
+    const triggerHeld = WEAPON.auto ? state.fireHeld : state.firePressed;
+    if (triggerHeld) {
       if (this.mag > 0) this.tryFire(animations);
       else this.beginReload(animations);
     }
@@ -414,14 +329,18 @@ export class Weapon {
 
   refill(): void {
     this.mag = WEAPON.magSize;
-    this.reserve = WEAPON.reserveAmmo;
+    this.reserve = WEAPON.unlimitedAmmo ? Number.POSITIVE_INFINITY : WEAPON.reserveAmmo;
     this.reloading = false;
     this.reloadTimer = 0;
     this.events.onAmmo(this.mag, this.reserve);
   }
 
   private beginReload(animations: AnimationController): void {
-    if (this.reloading || this.mag >= WEAPON.magSize || this.reserve <= 0) return;
+    // With unlimited ammo the magazine never drains, so the usual "mag full /
+    // reserve empty" guards are skipped and reload stays available as the
+    // manual R-key action (it replays the Reload animation and tops the mag).
+    if (this.reloading) return;
+    if (!WEAPON.unlimitedAmmo && (this.mag >= WEAPON.magSize || this.reserve <= 0)) return;
     const clipLength = 3.32; // the pack's Reload clip
     const speedRatio = animations.has('Reload') ? clipLength / WEAPON.reloadTime : 1;
     this.reloading = true;
@@ -444,7 +363,9 @@ export class Weapon {
   private tryFire(animations: AnimationController): void {
     if (this.cooldown > 0) return;
 
-    this.mag--;
+    // Unlimited ammo: the round is chambered, not consumed.
+    if (!WEAPON.unlimitedAmmo) this.mag--;
+    this.shotsFired++;
     this.cooldown = WEAPON.fireInterval;
     this.flashTimer = 0.05;
     this.kick = 1;
