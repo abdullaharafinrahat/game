@@ -141,9 +141,15 @@ export const WEAPON = {
    * degrees (x = pitch, y = yaw, z = roll — the same numbers the Babylon
    * inspector shows for `rotation`). The mount is FIXED: it does not follow the
    * hand pose, it is pinned to these exact values on the right-hand bone.
+   *
+   * Rotation note: these were SOLVED in-engine (verify/solve-mount.mjs) so the
+   * barrel lies along the character's visual forward with the stock in the
+   * fists. The rifle's local barrel axis is -X inside a node that ships a
+   * 180-degree Z flip, so intuitive-looking values such as
+   * [15.19, -16.35, 170.13] hang the gun barrel-down beside the leg instead.
    */
   mountPosition: [-0.05, -0.02, -0.03],
-  mountRotationDeg: [15.19, -16.35, 170.13],
+  mountRotationDeg: [2.71, 167.55, -88.67],
 } as const;
 
 
